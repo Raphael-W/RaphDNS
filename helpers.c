@@ -1,10 +1,7 @@
-//
-// Created by Raphael Wreford on 27/10/2026.
-//
-
 #include "helpers.h"
 
 #include <stdio.h>
+#include <time.h>
 
 const char* example_domains[] = {
     "google.com", "github.com", "example.com", "youtube.com", "facebook.com",
@@ -34,4 +31,10 @@ void print_ip(long ip) {
     a = (int) ((ip >> 24) & 0xff);
 
     printf("%d.%d.%d.%d\n", a, b, c, d);
+}
+
+time_t now_seconds(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec;
 }

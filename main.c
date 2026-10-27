@@ -1,5 +1,6 @@
 #include <string.h>
 #include <stdio.h>
+#include <unistd.h>
 #include "hashmap.h"
 #include "helpers.h"
 
@@ -12,8 +13,6 @@ int main(void) {
 
     entry *valid_cached_entry = hashmap_lookup(&cache, "google.com");
     entry *invalid_cached_entry = hashmap_lookup(&cache, "incorrect.com");
-
-    resize_hashmap(&cache, 16);
 
     print_ip(valid_cached_entry->ip);
     if (invalid_cached_entry == NULL) {printf("miss\n");};

@@ -62,7 +62,7 @@ void resize_hashmap(hashmap *h, int new_size) {
 void hashmap_insert(hashmap *h, char* domain, long ip) {
     uint64_t domain_hash = key_hash((uint8_t *) domain);
     int index = bucket_index(domain_hash, h->bucket_count);
-    cache_entry(h->buckets[index], create_entry(domain_hash, domain, ip));
+    cache_entry(h->buckets[index], create_entry(domain_hash, domain, ip, 300));
     h->entry_count++;
 
     double load_factor = (double) h->entry_count / h->bucket_count;
@@ -79,5 +79,6 @@ entry* hashmap_lookup(hashmap *h, char* domain) {
     uint64_t domain_hash = key_hash((uint8_t *) domain);
     int index = bucket_index(domain_hash, h->bucket_count);
     entry *cached_entry = lookup_entry(h->buckets[index], domain_hash, domain);
+
     return cached_entry;
 }
