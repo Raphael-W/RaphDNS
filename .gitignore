@@ -1,0 +1,11 @@
+# Build output
+cmake-build-*/
+build/
+*.o
+/dns
+
+# IDE
+.idea/
+
+# macOS
+.DS_Store
