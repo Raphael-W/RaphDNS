@@ -47,12 +47,23 @@ int network_listen(int port) {
 
         char ip[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &client.sin_addr, ip, sizeof ip);
-        printf("%zd bytes from %s:%d\n", n, ip, ntohs(client.sin_port));
+        printf("\n%zd bytes from %s:%d\n", n, ip, ntohs(client.sin_port));
         for (ssize_t i = 0; i < n; i++)
             printf("%02x%s", buf[i], (i % 16 == 15) ? "\n" : " ");
         printf("\n");
-        dns_packet packet = parse_dns(buf);
-        print_dns(&packet);
+        dns_packet packet = parse_dns_packet(buf, BUF_SIZE);
+        print_dns_packet(&packet);
+
+        uint8_t new_buf[BUF_SIZE];
+        int packet_length = create_dns_packet(new_buf, BUF_SIZE, &packet);
+        if (packet_length >= 0) {
+            printf("\nWhen parsed and recreated gives this:\n");
+            for (ssize_t i = 0; i < packet_length; i++)
+                printf("%02x%s", new_buf[i], (i % 16 == 15) ? "\n" : " ");
+            printf("\n");
+        }
+        dns_packet new_packet = parse_dns_packet(new_buf, BUF_SIZE);
+        //print_dns_packet(&new_packet);
     }
 
     close(sock);
