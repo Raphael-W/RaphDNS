@@ -82,7 +82,7 @@ static void read_record(bit_reader *r, dns_record *rec) {
     rec->rdlength = read_bits(r, 16);
 
     rec->rdata = malloc(rec->rdlength);
-    if (!rec->rdata) {
+    if (!rec->rdata && rec->rdlength != 0) {
         r->ok = false;
         return;
     }
@@ -93,7 +93,7 @@ static void read_record(bit_reader *r, dns_record *rec) {
 
 static dns_record *read_records(bit_reader *r, uint16_t count) {
     dns_record *records = calloc(count, sizeof *records);
-    if (!records) {
+    if (!records && count != 0) {
         r->ok = false;
         return NULL;
     }
@@ -168,54 +168,54 @@ void print_dns_packet(const dns_packet *p) {
     }
 
     for (int i = 0; i < p->an_count; i++) {
-        print_record(p->answers, "Answer Record");
+        print_record(&p->answers[i], "Answer Record");
     }
 
     for (int i = 0; i < p->ns_count; i++) {
-        print_record(p->authority, "Authority Record");
+        print_record(&p->authority[i], "Authority Record");
     }
 
     for (int i = 0; i < p->ar_count; i++) {
-        print_record(p->additional, "Additional Record");
+        print_record(&p->additional[i], "Additional Record");
     }
 }
 
 // READ & WRITE DNS PACKETS
 
-dns_packet parse_dns_packet(const uint8_t* buf, size_t buf_size) {
-    dns_packet new_packet = {0};
+int parse_dns_packet(const uint8_t* buf, size_t buf_size, dns_packet *p) {
+    memset(p, 0, sizeof *p); // Zero packet data
     bit_reader r = {.buf = buf, .size = buf_size, .bit = 0, .ok = true};
 
     //HEADER
-    new_packet.id = read_bits(&r, 16);
-    new_packet.qr = read_bits(&r, 1);
-    new_packet.opcode = read_bits(&r, 4);
-    new_packet.aa = read_bits(&r, 1);
-    new_packet.tc = read_bits(&r, 1);
-    new_packet.rd = read_bits(&r, 1);
-    new_packet.ra = read_bits(&r, 1);
+    p->id = read_bits(&r, 16);
+    p->qr = read_bits(&r, 1);
+    p->opcode = read_bits(&r, 4);
+    p->aa = read_bits(&r, 1);
+    p->tc = read_bits(&r, 1);
+    p->rd = read_bits(&r, 1);
+    p->ra = read_bits(&r, 1);
     read_bits(&r, 1); // Z (reserved)
-    new_packet.ad = read_bits(&r, 1);
-    new_packet.cd = read_bits(&r, 1);
-    new_packet.rcode = read_bits(&r, 4);
-    new_packet.qd_count = read_bits(&r, 16);
-    new_packet.an_count = read_bits(&r, 16);
-    new_packet.ns_count = read_bits(&r, 16);
-    new_packet.ar_count = read_bits(&r, 16);
+    p->ad = read_bits(&r, 1);
+    p->cd = read_bits(&r, 1);
+    p->rcode = read_bits(&r, 4);
+    p->qd_count = read_bits(&r, 16);
+    p->an_count = read_bits(&r, 16);
+    p->ns_count = read_bits(&r, 16);
+    p->ar_count = read_bits(&r, 16);
 
     // QUESTION
     dns_question new_question = {0};
     read_name(&r, new_question.name, sizeof new_question.name);
     new_question.type = read_bits(&r, 16);
     new_question.class = read_bits(&r, 16);
-    new_packet.question = new_question;
+    p->question = new_question;
 
     // RECORDS
-    new_packet.answers = read_records(&r, new_packet.an_count);
-    new_packet.authority = read_records(&r, new_packet.ns_count);
-    new_packet.additional = read_records(&r, new_packet.ar_count);
+    p->answers = read_records(&r, p->an_count);
+    p->authority = read_records(&r, p->ns_count);
+    p->additional = read_records(&r, p->ar_count);
 
-    return new_packet;
+    return r.ok ? (int)((r.bit + 7) / 8) : -1;
 }
 
 int create_dns_packet(uint8_t* buf, size_t buf_size, dns_packet* p) {

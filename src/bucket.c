@@ -45,15 +45,18 @@ entry* lookup_entry(bucket *bucket, uint64_t hash, char* domain) {
     entry *current = bucket->first;
     while (current != NULL) {
         if (current->expires_at <= now_seconds()) {
-            before->next = current->next;
+            entry* next = current->next;
+            if (before) before->next = next; else bucket->first = next;
+            if (bucket->last == current) bucket->last = before;
             free(current);
+            current = next;
             continue;
         }
         if ((current->hash == hash) && (strcmp(current->domain, domain) == 0)) {
             return current;
         }
-        current = current->next;
         before = current;
+        current = current->next;
     }
     return NULL;
 }

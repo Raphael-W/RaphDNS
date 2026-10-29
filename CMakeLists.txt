@@ -12,4 +12,5 @@ add_executable(dns
         src/network.c)
 
 target_include_directories(dns PRIVATE include)
-target_compile_options(dns PRIVATE -Wall -Wextra)
+target_compile_options(dns PRIVATE -Wall -Wextra -fsanitize=address,undefined -g)
+target_link_options(dns PRIVATE -fsanitize=address,undefined)

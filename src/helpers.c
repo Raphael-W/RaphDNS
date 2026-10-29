@@ -1,5 +1,6 @@
 #include "helpers.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <time.h>
 
@@ -18,11 +19,11 @@ const char* example_domains[] = {
 };
 const int example_domain_length = sizeof example_domains / sizeof example_domains[0];
 
-long ip(const int a, const int b, const int c, const int d) {
-    return (a << 24) + (b << 16) + (c << 8) + d;
+uint32_t ip(const uint32_t a, const uint32_t b, const uint32_t c, const uint32_t d) {
+    return (a << 24) | (b << 16) | (c << 8) | d;
 }
 
-void print_ip(long ip) {
+void print_ip(uint32_t ip) {
     int a, b, c, d;
 
     d = (int) (ip & 0xff);

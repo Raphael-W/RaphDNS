@@ -51,7 +51,10 @@ int network_listen(int port) {
         for (ssize_t i = 0; i < n; i++)
             printf("%02x%s", buf[i], (i % 16 == 15) ? "\n" : " ");
         printf("\n");
-        dns_packet packet = parse_dns_packet(buf, BUF_SIZE);
+        dns_packet packet;
+        if (parse_dns_packet(buf, n, &packet) < 0) {
+            printf("Malformed packet\n");
+        }
         print_dns_packet(&packet);
 
         uint8_t new_buf[BUF_SIZE];
@@ -61,9 +64,13 @@ int network_listen(int port) {
             for (ssize_t i = 0; i < packet_length; i++)
                 printf("%02x%s", new_buf[i], (i % 16 == 15) ? "\n" : " ");
             printf("\n");
+
+            dns_packet new_packet;
+            if (parse_dns_packet(new_buf, packet_length, &new_packet) < 0) {
+                printf("Malformed packet\n");
+            }
+            print_dns_packet(&new_packet);
         }
-        dns_packet new_packet = parse_dns_packet(new_buf, BUF_SIZE);
-        //print_dns_packet(&new_packet);
     }
 
     close(sock);
