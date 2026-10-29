@@ -88,6 +88,60 @@ static void write_name(bit_writer *w, const char *in) {
     write_bits(w, 0, 8);
 }
 
+static void copy_name(bit_reader *r, bit_writer *w) {
+    char name[256];
+    read_name(r, name, sizeof name);
+    write_name(w, name);
+}
+
+static void read_rdata(bit_reader *r, dns_record *rec) {
+    size_t end = r->bit + (size_t) rec->rdlength * 8;
+    uint8_t tmp[600];
+    bit_writer w = {.buf = tmp, .size = sizeof tmp, .bit = 0, .ok = true};
+
+    switch (rec->type) {
+        case DNS_TYPE_NS:
+        case DNS_TYPE_CNAME:
+        case DNS_TYPE_PTR:
+            copy_name(r, &w);
+            break;
+        case DNS_TYPE_MX:
+            write_bits(&w, read_bits(r, 16), 16);
+            copy_name(r, &w);
+            break;
+        case DNS_TYPE_SOA:
+            copy_name(r, &w);
+            copy_name(r, &w);
+            for (int i = 0; i < 5; i++) {
+                write_bits(&w, read_bits(r, 32), 32);
+            }
+            break;
+        default:
+            rec->rdata = malloc(rec->rdlength);
+            if (!rec->rdata && rec->rdlength != 0) {
+                r->ok = false;
+                return;
+            }
+            for (uint16_t i = 0; i < rec->rdlength; i++) {
+                rec->rdata[i] = read_bits(r, 8);
+            }
+            return;
+    }
+
+    if (!r->ok || !w.ok || r->bit != end) {
+        r->ok = false;
+        return;
+    }
+
+    rec->rdlength = w.bit / 8;
+    rec->rdata = malloc(rec->rdlength);
+    if (!rec->rdata) {
+        r->ok = false;
+        return;
+    }
+    memcpy(rec->rdata, tmp, rec->rdlength);
+}
+
 static void read_record(bit_reader *r, dns_record *rec) {
     read_name(r, rec->name, sizeof rec->name);
     rec->type = read_bits(r, 16);
@@ -95,14 +149,7 @@ static void read_record(bit_reader *r, dns_record *rec) {
     rec->ttl = read_bits(r, 32);
     rec->rdlength = read_bits(r, 16);
 
-    rec->rdata = malloc(rec->rdlength);
-    if (!rec->rdata && rec->rdlength != 0) {
-        r->ok = false;
-        return;
-    }
-    for (uint16_t i = 0; i < rec->rdlength; i++) {
-        rec->rdata[i] = read_bits(r, 8);
-    }
+    read_rdata(r, rec);
 }
 
 static dns_record *read_records(bit_reader *r, uint16_t count) {

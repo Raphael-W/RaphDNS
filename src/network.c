@@ -33,7 +33,7 @@ long send_dns_packet(dns_packet *p, const char *server_ip, uint8_t *out, size_t 
     close(sock);
     if (n < 0) return -1;
 
-    if (parse_dns_packet(out, out_size, r) < 0) return -1;
+    if (parse_dns_packet(out, n, r) < 0) return -1;
     return n;
 }
 
@@ -78,7 +78,7 @@ int network_listen(int port) {
 
         dns_packet packet = {0};
         if (parse_dns_packet(buf, n, &packet) < 0) {
-            printf("Malformed packet\n");
+            printf("Malformed request packet\n");
             free_dns_packet(&packet);
             continue;
         }
@@ -87,16 +87,18 @@ int network_listen(int port) {
             printf("Received DNS request for %s\n", packet.question.name);
         }
 
-
         dns_packet response = {0};
         uint8_t response_buf[BUF_SIZE];
-        long response_length = send_dns_packet(&packet, "152.78.255.75", response_buf, sizeof response_buf, &response);
+        long response_length = send_dns_packet(&packet, "1.1.1.1", response_buf, sizeof response_buf, &response);
         if (response_length >= 0) {
-            //print_dns_packet(&response);
             sendto(sock, response_buf, response_length, 0, (struct sockaddr *)&client, client_len);
         }
         else {
-            printf("Malformed packet\n");
+            printf("Malformed response packet:\n");
+            for (int i = 0; i < n; i++) {
+                printf("%02x ", buf[i]);
+            }
+            printf("\n");
         }
 
         free_dns_packet(&packet);

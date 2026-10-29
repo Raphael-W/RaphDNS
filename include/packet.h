@@ -4,6 +4,44 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+typedef enum {
+    DNS_TYPE_A     = 1,
+    DNS_TYPE_NS    = 2,
+    DNS_TYPE_CNAME = 5,
+    DNS_TYPE_SOA   = 6,
+    DNS_TYPE_PTR   = 12,
+    DNS_TYPE_MX    = 15,
+    DNS_TYPE_TXT   = 16,
+    DNS_TYPE_AAAA  = 28,
+    DNS_TYPE_SRV   = 33,
+    DNS_TYPE_OPT   = 41,
+    DNS_TYPE_HTTPS = 65,
+    DNS_TYPE_ANY   = 255,
+} dns_type;
+
+typedef enum {
+    DNS_CLASS_IN  = 1, //Internet
+    DNS_CLASS_CH  = 3, //Chaos (e.g. version.bind)
+    DNS_CLASS_ANY = 255,
+} dns_class;
+
+typedef enum {
+    DNS_RCODE_NOERROR  = 0,
+    DNS_RCODE_FORMERR  = 1, //Malformed query
+    DNS_RCODE_SERVFAIL = 2, //Server/upstream failure
+    DNS_RCODE_NXDOMAIN = 3, //Name doesn't exist
+    DNS_RCODE_NOTIMP   = 4, //Not implemented (e.g. opcode)
+    DNS_RCODE_REFUSED  = 5,
+} dns_rcode;
+
+typedef enum {
+    DNS_OPCODE_QUERY  = 0,
+    DNS_OPCODE_IQUERY = 1, //Obsolete
+    DNS_OPCODE_STATUS = 2,
+    DNS_OPCODE_NOTIFY = 4,
+    DNS_OPCODE_UPDATE = 5,
+} dns_opcode;
+
 typedef struct {
     char name[256]; //e.g. hostname (e.g. example.com)
     uint16_t type; //A/AAAA/CNAME etc.
