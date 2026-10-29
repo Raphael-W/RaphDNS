@@ -9,7 +9,7 @@
 
 #define BUF_SIZE 4096
 
-long send_dns_packet(dns_packet *p, const char *server_ip, dns_packet *r) {
+long send_dns_packet(dns_packet *p, const char *server_ip, uint8_t *out, size_t out_size, dns_packet *r) {
     uint8_t query_packet[BUF_SIZE];
     size_t query_length = create_dns_packet(query_packet, BUF_SIZE, p);
 
@@ -29,14 +29,11 @@ long send_dns_packet(dns_packet *p, const char *server_ip, dns_packet *r) {
         return -1;
     }
 
-    uint8_t response_packet[BUF_SIZE];
-    ssize_t n = recvfrom(sock, response_packet, BUF_SIZE, 0, NULL, NULL);
-
-    if (parse_dns_packet(response_packet, BUF_SIZE, r) < 0) {
-        return -1;
-    }
-
+    ssize_t n = recvfrom(sock, out, out_size, 0, NULL, NULL);
     close(sock);
+    if (n < 0) return -1;
+
+    if (parse_dns_packet(out, out_size, r) < 0) return -1;
     return n;
 }
 
@@ -86,11 +83,17 @@ int network_listen(int port) {
             continue;
         }
 
-        // print_dns_packet(&packet);
+        if ((packet.qr == 0) && (packet.qd_count == 1)) {
+            printf("Received DNS request for %s\n", packet.question.name);
+        }
+
 
         dns_packet response = {0};
-        if (send_dns_packet(&packet, "152.78.255.75", &response) >= 0) {
-            print_dns_packet(&response);
+        uint8_t response_buf[BUF_SIZE];
+        long response_length = send_dns_packet(&packet, "152.78.255.75", response_buf, sizeof response_buf, &response);
+        if (response_length >= 0) {
+            //print_dns_packet(&response);
+            sendto(sock, response_buf, response_length, 0, (struct sockaddr *)&client, client_len);
         }
         else {
             printf("Malformed packet\n");
