@@ -49,14 +49,28 @@ static void write_bits(bit_writer *w, uint32_t value, unsigned count) {
 
 static void read_name(bit_reader *r, char *out, size_t out_size) {
     size_t n = 0;
-    uint8_t len;
-    while ((len = read_bits(r, 8)) > 0) {
+    size_t resume = 0;
+    int jumps = 0;
+
+    for (;;) {
+        uint8_t len = read_bits(r, 8);
+        if (!r->ok || len == 0) break;
+        if ((len & 0xC0) == 0xC0) {
+            size_t offset = ((len & 0x3F) << 8) | read_bits(r, 8);
+            if (jumps == 0) resume = r->bit;
+            if (++jumps > 16) {r->ok = false; break;}
+            r->bit = offset * 8;
+            continue;
+        }
+        if (len > 63) {r->ok = false; break;}
+
         if (n + len + 2 > out_size) { r->ok = false; break; }
         if (n) out[n++] = '.';
         for (uint8_t i = 0; i < len; i++)
             out[n++] = (char) read_bits(r, 8);
     }
     out[n] = '\0';
+    if (jumps) r->bit = resume;
 }
 
 static void write_name(bit_writer *w, const char *in) {

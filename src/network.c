@@ -9,6 +9,37 @@
 
 #define BUF_SIZE 4096
 
+long send_dns_packet(dns_packet *p, const char *server_ip, dns_packet *r) {
+    uint8_t query_packet[BUF_SIZE];
+    size_t query_length = create_dns_packet(query_packet, BUF_SIZE, p);
+
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) return -1;
+
+    struct timeval tv = { .tv_sec = 2, .tv_usec = 0 };
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+
+    struct sockaddr_in server = {0};
+    server.sin_family = AF_INET;
+    server.sin_port = htons(53);
+    inet_pton(AF_INET, server_ip, &server.sin_addr);
+
+    if (sendto(sock, query_packet, query_length, 0, (struct sockaddr *)&server, sizeof server) < 0) {
+        close(sock);
+        return -1;
+    }
+
+    uint8_t response_packet[BUF_SIZE];
+    ssize_t n = recvfrom(sock, response_packet, BUF_SIZE, 0, NULL, NULL);
+
+    if (parse_dns_packet(response_packet, BUF_SIZE, r) < 0) {
+        return -1;
+    }
+
+    close(sock);
+    return n;
+}
+
 int network_listen(int port) {
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
@@ -47,36 +78,26 @@ int network_listen(int port) {
 
         char ip[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &client.sin_addr, ip, sizeof ip);
-        printf("\n%zd bytes from %s:%d\n", n, ip, ntohs(client.sin_port));
-        for (ssize_t i = 0; i < n; i++)
-            printf("%02x%s", buf[i], (i % 16 == 15) ? "\n" : " ");
-        printf("\n");
-        dns_packet packet;
+
+        dns_packet packet = {0};
         if (parse_dns_packet(buf, n, &packet) < 0) {
             printf("Malformed packet\n");
             free_dns_packet(&packet);
             continue;
         }
-        print_dns_packet(&packet);
 
-        uint8_t new_buf[BUF_SIZE];
-        int packet_length = create_dns_packet(new_buf, BUF_SIZE, &packet);
-        if (packet_length >= 0) {
-            printf("\nWhen parsed and recreated gives this:\n");
-            for (ssize_t i = 0; i < packet_length; i++)
-                printf("%02x%s", new_buf[i], (i % 16 == 15) ? "\n" : " ");
-            printf("\n");
+        // print_dns_packet(&packet);
 
-            dns_packet new_packet;
-            if (parse_dns_packet(new_buf, packet_length, &new_packet) < 0) {
-                printf("Malformed packet\n");
-                free_dns_packet(&new_packet);
-                continue;
-            }
-            print_dns_packet(&new_packet);
-            free_dns_packet(&new_packet);
+        dns_packet response = {0};
+        if (send_dns_packet(&packet, "152.78.255.75", &response) >= 0) {
+            print_dns_packet(&response);
         }
+        else {
+            printf("Malformed packet\n");
+        }
+
         free_dns_packet(&packet);
+        free_dns_packet(&response);
     }
 
     close(sock);
