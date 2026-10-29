@@ -180,7 +180,7 @@ void print_dns_packet(const dns_packet *p) {
     }
 }
 
-// READ & WRITE DNS PACKETS
+//DNS PACKET HANDLING
 
 int parse_dns_packet(const uint8_t* buf, size_t buf_size, dns_packet *p) {
     memset(p, 0, sizeof *p); // Zero packet data
@@ -250,4 +250,21 @@ int create_dns_packet(uint8_t* buf, size_t buf_size, dns_packet* p) {
     write_records(&w, p->additional, p->ar_count);
 
     return w.ok ? (int)((w.bit + 7) / 8) : -1;
+}
+
+static void free_records(dns_record *records, uint16_t count) {
+    if (!records) return;
+    for (uint16_t i = 0; i < count; i++) {
+        free(records[i].rdata);
+    }
+    free(records);
+}
+
+void free_dns_packet(dns_packet *p) {
+    free_records(p->answers, p->an_count);
+    free_records(p->authority, p->ns_count);
+    free_records(p->additional, p->ar_count);
+    p->answers = NULL;
+    p->authority = NULL;
+    p->additional = NULL;
 }

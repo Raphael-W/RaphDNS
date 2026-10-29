@@ -42,8 +42,9 @@ typedef struct {
     dns_record *additional;
 } dns_packet;
 
+void print_dns_packet(const dns_packet *p);
 int parse_dns_packet(const uint8_t* buf, size_t buf_size, dns_packet *p);
 int create_dns_packet(uint8_t* buf, size_t buf_size, dns_packet* packet);
-void print_dns_packet(const dns_packet *p);
+void free_dns_packet(dns_packet *p);
 
 #endif //DNS_PACKET_H

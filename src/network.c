@@ -54,6 +54,8 @@ int network_listen(int port) {
         dns_packet packet;
         if (parse_dns_packet(buf, n, &packet) < 0) {
             printf("Malformed packet\n");
+            free_dns_packet(&packet);
+            continue;
         }
         print_dns_packet(&packet);
 
@@ -68,9 +70,13 @@ int network_listen(int port) {
             dns_packet new_packet;
             if (parse_dns_packet(new_buf, packet_length, &new_packet) < 0) {
                 printf("Malformed packet\n");
+                free_dns_packet(&new_packet);
+                continue;
             }
             print_dns_packet(&new_packet);
+            free_dns_packet(&new_packet);
         }
+        free_dns_packet(&packet);
     }
 
     close(sock);
