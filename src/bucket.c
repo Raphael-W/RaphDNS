@@ -83,6 +83,7 @@ entry* lookup_entry(bucket *bucket, uint64_t hash, dns_question *question) {
             if (bucket->last == current) bucket->last = before;
             free_dns_packet(&current->packet);
             free(current);
+            current = next;
             continue;
         }
         if ((current->hash == hash) && questions_eq(question, &current->packet.question)) {
