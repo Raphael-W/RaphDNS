@@ -1,5 +1,6 @@
 #include "network.h"
 #include "packet.h"
+#include "hashmap.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,10 +10,7 @@
 
 #define BUF_SIZE 4096
 
-long send_dns_packet(dns_packet *p, const char *server_ip, uint8_t *out, size_t out_size, dns_packet *r) {
-    uint8_t query_packet[BUF_SIZE];
-    size_t query_length = create_dns_packet(query_packet, BUF_SIZE, p);
-
+long send_dns_packet(const char *server_ip, const uint8_t *query, size_t query_len, uint8_t *out, size_t out_size) {
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) return -1;
 
@@ -24,7 +22,7 @@ long send_dns_packet(dns_packet *p, const char *server_ip, uint8_t *out, size_t 
     server.sin_port = htons(53);
     inet_pton(AF_INET, server_ip, &server.sin_addr);
 
-    if (sendto(sock, query_packet, query_length, 0, (struct sockaddr *)&server, sizeof server) < 0) {
+    if (sendto(sock, query, query_len, 0, (struct sockaddr *)&server, sizeof server) < 0) {
         close(sock);
         return -1;
     }
@@ -33,11 +31,12 @@ long send_dns_packet(dns_packet *p, const char *server_ip, uint8_t *out, size_t 
     close(sock);
     if (n < 0) return -1;
 
-    if (parse_dns_packet(out, n, r) < 0) return -1;
     return n;
 }
 
 int network_listen(int port) {
+    hashmap cache = create_hashmap(8);
+
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
         perror("socket");
@@ -66,16 +65,14 @@ int network_listen(int port) {
         struct sockaddr_in client;
         socklen_t client_len = sizeof client;
 
-        ssize_t n = recvfrom(sock, buf, sizeof buf, 0,
-                             (struct sockaddr *)&client, &client_len);
-        if (n < 0) {
-            perror("recvfrom");
-            continue;
-        }
+        // Receive packet and store in buf
+        ssize_t n = recvfrom(sock, buf, sizeof buf, 0, (struct sockaddr *)&client, &client_len);
+        if (n < 0) { perror("recvfrom"); continue; }
 
         char ip[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &client.sin_addr, ip, sizeof ip);
 
+        // Parse DNS packet
         dns_packet packet = {0};
         if (parse_dns_packet(buf, n, &packet) < 0) {
             printf("Malformed request packet\n");
@@ -83,26 +80,44 @@ int network_listen(int port) {
             continue;
         }
 
-        if ((packet.qr == 0) && (packet.qd_count == 1)) {
+        if (packet.qr == 0 && packet.qd_count == 1) {
             printf("Received DNS request for %s\n", packet.question.name);
         }
 
-        dns_packet response = {0};
         uint8_t response_buf[BUF_SIZE];
-        long response_length = send_dns_packet(&packet, "1.1.1.1", response_buf, sizeof response_buf, &response);
+        ssize_t response_length = 0;
+        const dns_packet *cached = hashmap_lookup(&cache, &packet.question);
+        if (cached) {
+            dns_packet reply = *cached;
+            reply.id = packet.id;
+            reply.question = packet.question;
+            response_length = create_dns_packet(response_buf, sizeof response_buf, &reply);
+        }
+        else { // Fetch answer instead
+            response_length = send_dns_packet("1.1.1.1", buf, n, response_buf, sizeof response_buf);
+
+            dns_packet cached_packet = {0};
+            if (parse_dns_packet(response_buf, response_length, &cached_packet) >= 0) {
+                if (cached_packet.rcode != DNS_RCODE_NOERROR && cached_packet.rcode != DNS_RCODE_NXDOMAIN) {
+                    free_dns_packet(&cached_packet);
+                }
+                else {
+                    hashmap_insert(&cache, cached_packet);
+                }
+            }
+            else {
+                free_dns_packet(&cached_packet);
+            }
+        }
+
         if (response_length >= 0) {
             sendto(sock, response_buf, response_length, 0, (struct sockaddr *)&client, client_len);
         }
         else {
-            printf("Malformed response packet:\n");
-            for (int i = 0; i < n; i++) {
-                printf("%02x ", buf[i]);
-            }
-            printf("\n");
+            printf("Upstream error\n");
         }
 
         free_dns_packet(&packet);
-        free_dns_packet(&response);
     }
 
     close(sock);

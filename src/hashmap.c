@@ -1,14 +1,13 @@
 #include "hashmap.h"
 #include "bucket.h"
 
-#include <stdio.h>
+#include <ctype.h>
 #include <stdlib.h>
-#include <string.h>
 
 #define MAX_LOAD_FACTOR 0.75
+#define FNV_OFFSET 0xcbf29ce484222325ULL
 
-uint64_t fnv1a(const uint8_t *data, size_t len) {
-    uint64_t h = 0xcbf29ce484222325ULL;
+uint64_t fnv1a(uint64_t h, const uint8_t *data, size_t len) {
     for (size_t i = 0; i < len; i++) {
         h ^= data[i];
         h *= 0x100000001b3ULL;
@@ -16,8 +15,17 @@ uint64_t fnv1a(const uint8_t *data, size_t len) {
     return h;
 }
 
-uint64_t key_hash(const uint8_t *domain) {
-    return fnv1a(domain, strlen((char*) domain));
+uint64_t key_hash(dns_question *q) {
+    uint64_t h = FNV_OFFSET;
+    // Hash hostname
+    for (const char *c = q->name; *c; c++) {
+        uint8_t lower = (uint8_t) tolower((unsigned char) *c);
+        h = fnv1a(h, &lower, 1);
+    }
+
+    // Hash type + class
+    uint8_t rest[4] = {q->type >> 8, q->type & 0xFF, q->class >> 8, q->class & 0xFF};
+    return fnv1a(h, rest, sizeof rest);
 }
 
 int bucket_index(uint64_t hash, int size) {
@@ -59,26 +67,28 @@ void resize_hashmap(hashmap *h, int new_size) {
     h->buckets = new_buckets;
 }
 
-void hashmap_insert(hashmap *h, char* domain, long ip) {
-    uint64_t domain_hash = key_hash((uint8_t *) domain);
-    int index = bucket_index(domain_hash, h->bucket_count);
-    cache_entry(h->buckets[index], create_entry(domain_hash, domain, ip, 300));
+void hashmap_insert(hashmap *h, dns_packet p) {
+    uint64_t hash = key_hash(&p.question);
+    int index = bucket_index(hash, h->bucket_count);
+
+    if (packet_min_ttl(&p) == 0) {
+        free_dns_packet(&p);
+        return;
+    }
+    cache_entry(h->buckets[index], create_entry(hash, p));
     h->entry_count++;
 
     double load_factor = (double) h->entry_count / h->bucket_count;
     if (load_factor >= MAX_LOAD_FACTOR) {
-        int old_size = h->bucket_count;
         int new_size = h->bucket_count * 2;
         resize_hashmap(h, new_size);
-        printf("Hashmap resized from %d buckets to %d\n", old_size, new_size);
     }
-    printf("Inserted %s into bucket %d\n", domain, index);
 }
 
-entry* hashmap_lookup(hashmap *h, char* domain) {
-    uint64_t domain_hash = key_hash((uint8_t *) domain);
-    int index = bucket_index(domain_hash, h->bucket_count);
-    entry *cached_entry = lookup_entry(h->buckets[index], domain_hash, domain);
+const dns_packet* hashmap_lookup(hashmap *h, dns_question *q) {
+    uint64_t hash = key_hash(q);
+    int index = bucket_index(hash, h->bucket_count);
+    entry *cached_entry = lookup_entry(h->buckets[index], hash, q);
 
-    return cached_entry;
+    return cached_entry ? &cached_entry->packet : NULL;
 }
