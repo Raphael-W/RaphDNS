@@ -9,7 +9,26 @@
 #include <sys/socket.h>
 
 #define BUF_SIZE 4096
-#define RESOLVER_IP "152.78.255.75"
+#define RESOLVER_IP_UNI "152.78.255.75"
+#define RESOLVER_IP "1.1.1.1"
+
+static const char *dns_type_name(uint16_t type) {
+    switch (type) {
+    case DNS_TYPE_A:     return "A";
+    case DNS_TYPE_NS:    return "NS";
+    case DNS_TYPE_CNAME: return "CNAME";
+    case DNS_TYPE_SOA:   return "SOA";
+    case DNS_TYPE_PTR:   return "PTR";
+    case DNS_TYPE_MX:    return "MX";
+    case DNS_TYPE_TXT:   return "TXT";
+    case DNS_TYPE_AAAA:  return "AAAA";
+    case DNS_TYPE_SRV:   return "SRV";
+    case DNS_TYPE_OPT:   return "OPT";
+    case DNS_TYPE_HTTPS: return "HTTPS";
+    case DNS_TYPE_ANY:   return "ANY";
+    default:             return "UNKNOWN";
+    }
+}
 
 static int make_error(const dns_packet *query, uint8_t rcode, uint8_t *out, size_t out_size) {
     dns_packet fail = *query;
@@ -57,11 +76,9 @@ int network_listen(int port) {
         return 1;
     }
 
-    // Let you restart the server without waiting for the port to free up
     int yes = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);
 
-    // 2. Bind it to a port, so packets sent there arrive at this socket
     struct sockaddr_in addr = {0};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port); // network byte order
@@ -72,8 +89,7 @@ int network_listen(int port) {
         return 1;
     }
     printf("Listening on 127.0.0.1:%d\n", port);
-
-    // 3. Receive packets forever
+    
     uint8_t buf[BUF_SIZE];
     for (;;) {
         struct sockaddr_in client;
@@ -106,7 +122,7 @@ int network_listen(int port) {
         }
 
         else { // Valid request
-            printf("Received DNS request for %s\n", packet.question.name);
+            printf("Received %s request for %s\n", dns_type_name(packet.question.type), packet.question.name);
             const dns_packet *cached = cache_lookup(&cache, &packet.question);
             if (cached) { // Cache exists
                 dns_packet reply = *cached;
