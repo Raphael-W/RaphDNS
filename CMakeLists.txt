@@ -5,11 +5,10 @@ set(CMAKE_C_STANDARD 17)
 
 add_executable(dns
         src/main.c
-        src/hashmap.c
-        src/bucket.c
         src/helpers.c
         src/packet.c
-        src/network.c)
+        src/network.c
+        src/cache.c)
 
 target_include_directories(dns PRIVATE include)
 target_compile_options(dns PRIVATE -Wall -Wextra -fsanitize=address,undefined -g)
