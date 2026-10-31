@@ -8,7 +8,8 @@ add_executable(dns
         src/helpers.c
         src/packet.c
         src/network.c
-        src/cache.c)
+        src/cache.c
+        src/pending.c)
 
 target_include_directories(dns PRIVATE include)
 target_compile_options(dns PRIVATE -Wall -Wextra -fsanitize=address,undefined -g)

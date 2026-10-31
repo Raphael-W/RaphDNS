@@ -1,12 +1,18 @@
 #include "network.h"
 #include "packet.h"
 #include "cache.h"
+#include "helpers.h"
+#include "pending.h"
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <strings.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <poll.h>
+#include <fcntl.h>
+#include <errno.h>
 
 #define BUF_SIZE 4096
 #define RESOLVER_IP_UNI "152.78.255.75"
@@ -39,68 +45,100 @@ static int make_error(const dns_packet *query, uint8_t rcode, uint8_t *out, size
     return create_dns_packet(out, out_size, &fail);
 }
 
-long send_dns_packet(const char *server_ip, const uint8_t *query, size_t query_len, uint8_t *out, size_t out_size) {
-    int sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock < 0) return -1;
-
-    struct timeval tv = { .tv_sec = 2, .tv_usec = 0 };
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
-
-    struct sockaddr_in server = {0};
-    server.sin_family = AF_INET;
-    server.sin_port = htons(53);
-    if (inet_pton(AF_INET, server_ip, &server.sin_addr) != 1) {
-        close(sock);
-        return -1;
-    }
-
-    if (connect(sock, (struct sockaddr *)&server, sizeof server) < 0 ||
-        send(sock, query, query_len, 0) < 0) {
-        close(sock);
-        return -1;
-    }
-
-    ssize_t n = recv(sock, out, out_size, 0);
-    close(sock);
-    if (n < 12) return -1; //too short for a DNS header
-    if (out[0] != query[0] || out[1] != query[1]) return -1; // wrong ID
-    return n;
+static void set_packet_id(uint8_t *buf, const uint16_t id) {
+    buf[0] = id >> 8;
+    buf[1] = id & 0xFF;
 }
 
-int network_listen(int port) {
-    cache cache = cache_create(8);
+// SOCKET SETUP
 
+// Non-blocking, so reads return EAGAIN instead of waiting when nothing has arrived
+static int udp_socket(void) {
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
         perror("socket");
-        return 1;
+        return -1;
     }
+    if (fcntl(sock, F_SETFL, O_NONBLOCK) < 0) {
+        perror("fcntl");
+        close(sock);
+        return -1;
+    }
+    return sock;
+}
 
+// Fills out with ip:port. Returns false if ip isn't a valid IPv4 address
+static bool make_addr(const char *ip, int port, struct sockaddr_in *out) {
+    memset(out, 0, sizeof *out);
+    out->sin_family = AF_INET;
+    out->sin_port = htons(port); // network byte order
+    return inet_pton(AF_INET, ip, &out->sin_addr) == 1;
+}
+
+// Socket that clients send queries to
+static int open_listener(int port) {
+    int sock = udp_socket();
+    if (sock < 0) return -1;
+
+    // Allows server to be restarted without waiting for the port to free up
     int yes = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);
 
-    struct sockaddr_in addr = {0};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port); // network byte order
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK); // 127.0.0.1 only, for now
-
+    struct sockaddr_in addr;
+    make_addr("127.0.0.1", port, &addr); // 127.0.0.1 only, for now
     if (bind(sock, (struct sockaddr *)&addr, sizeof addr) < 0) {
         perror("bind");
-        return 1;
+        close(sock);
+        return -1;
     }
-    printf("Listening on 127.0.0.1:%d\n", port);
-    
+    return sock;
+}
+
+// Socket for talking to the upstream resolver
+static int open_upstream(const char *ip) {
+    int sock = udp_socket();
+    if (sock < 0) return -1;
+
+    struct sockaddr_in server;
+    if (!make_addr(ip, 53, &server)) {
+        fprintf(stderr, "Invalid upstream IP: %s\n", ip);
+        close(sock);
+        return -1;
+    }
+
+    // Connecting a UDP socket makes the kernel drop packets from any other address
+    if (connect(sock, (struct sockaddr *)&server, sizeof server) < 0) {
+        perror("connect");
+        close(sock);
+        return -1;
+    }
+    return sock;
+}
+
+static void expire_pending(int sock, time_t now) {
+    query *q;
     uint8_t buf[BUF_SIZE];
+    while ((q = pending_next_expired(now))) {
+        dns_packet p = {.id = q->client_id, .rd = 1, .qd_count = 1, .question = q->question};
+        int n = make_error(&p, DNS_RCODE_SERVFAIL, buf, sizeof buf);
+        if (n > 0) { sendto(sock, buf, n, 0, (struct sockaddr *)&q->client, q->client_len); }
+        pending_remove(q);
+    }
+}
+
+static void handle_client(int sock, int sock_up, cache *c) {
     for (;;) {
+        uint8_t buf[BUF_SIZE];
+
         struct sockaddr_in client;
         socklen_t client_len = sizeof client;
 
         // Receive packet and store in buf
         ssize_t n = recvfrom(sock, buf, sizeof buf, 0, (struct sockaddr *)&client, &client_len);
-        if (n < 0) { perror("recvfrom"); continue; }
-
-        char ip[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &client.sin_addr, ip, sizeof ip);
+        if (n < 0) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK) perror("recvfrom");
+            break;
+        }
 
         // Parse DNS packet
         dns_packet packet = {0};
@@ -113,17 +151,21 @@ int network_listen(int port) {
         uint8_t response_buf[BUF_SIZE];
         ssize_t response_length = 0;
 
+        // Ignore packets marked as responses
         if (packet.qr == 1) {
             free_dns_packet(&packet);
             continue;
         }
+
+        // There should only ever be one question (despite what the existence of qd_count may suggest)
         if (packet.qd_count != 1) {
             response_length = make_error(&packet, DNS_RCODE_FORMERR, response_buf, sizeof response_buf);
         }
 
         else { // Valid request
             printf("Received %s request for %s\n", dns_type_name(packet.question.type), packet.question.name);
-            const dns_packet *cached = cache_lookup(&cache, &packet.question);
+            const dns_packet *cached = cache_lookup(c, &packet.question);
+
             if (cached) { // Cache exists
                 dns_packet reply = *cached;
                 reply.id = packet.id;
@@ -131,16 +173,17 @@ int network_listen(int port) {
                 response_length = create_dns_packet(response_buf, sizeof response_buf, &reply);
             }
             else { // Fetch answer upstream
-                response_length = send_dns_packet(RESOLVER_IP, buf, n, response_buf, sizeof response_buf);
-                if (response_length >= 0) {
-                    dns_packet cached_packet = {0};
-                    if (parse_dns_packet(response_buf, response_length, &cached_packet) >= 0 &&
-                        (cached_packet.rcode == DNS_RCODE_NOERROR || cached_packet.rcode == DNS_RCODE_NXDOMAIN) &&
-                        !cached_packet.tc) {
-                        cache_insert(&cache, cached_packet);
-                    }
-                    else {
-                        free_dns_packet(&cached_packet);
+                query query = {.client=client, .client_id=packet.id, .client_len=client_len, .question=packet.question, .expires_at=now_seconds() + 2};
+                int query_id = pending_add(&query);
+
+                if (query_id < 0) {
+                    response_length = -1;
+                }
+                else {
+                    set_packet_id(buf, query_id);
+                    if (send(sock_up, buf, n, 0) < 0) {
+                        pending_remove(pending_find(query_id));
+                        response_length = -1;
                     }
                 }
             }
@@ -149,13 +192,80 @@ int network_listen(int port) {
         if (response_length < 0) {
             response_length = make_error(&packet, DNS_RCODE_SERVFAIL, response_buf, sizeof response_buf);
         }
-
-        if (response_length >= 0) {
+        if (response_length > 0) {
             sendto(sock, response_buf, response_length, 0, (struct sockaddr *)&client, client_len);
         }
         free_dns_packet(&packet);
+
+    }
+}
+
+static void handle_upstream(int sock_up, int sock, cache *c) {
+    for (;;) {
+        uint8_t buf[BUF_SIZE];
+        ssize_t n = recv(sock_up, buf, sizeof buf, 0);
+        if (n < 0) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK) perror("recv");
+            break;
+        }
+        if (n < 12) continue; // too short for a DNS header
+
+        query *q = pending_find((uint16_t)(buf[0] << 8 | buf[1]));
+        if (!q) continue;
+
+        dns_packet reply = {0};
+        if (parse_dns_packet(buf, n, &reply) < 0 ||
+            strcasecmp(reply.question.name, q->question.name) != 0 ||
+            reply.question.type != q->question.type ||
+            reply.question.class != q->question.class) {
+            free_dns_packet(&reply);
+            continue;
+        }
+
+        set_packet_id(buf, q->client_id);
+        sendto(sock, buf, n, 0, (struct sockaddr *) &q->client, q->client_len);
+        pending_remove(q);
+        if ((reply.rcode == DNS_RCODE_NOERROR || reply.rcode == DNS_RCODE_NXDOMAIN) && !reply.tc) {
+            cache_insert(c, reply);
+        }
+        else {
+            free_dns_packet(&reply);
+        }
+    }
+}
+
+int network_listen(int port) {
+    cache cache = cache_create(8);
+
+    int sock = open_listener(port);
+    if (sock < 0) return 1;
+
+    int up_sock = open_upstream(RESOLVER_IP);
+    if (up_sock < 0) { close(sock); return 1; }
+
+    struct pollfd fds[2] = {
+        {.fd = sock, .events = POLLIN},
+        {.fd = up_sock, .events = POLLIN}
+    };
+
+    printf("Listening on 127.0.0.1:%d\n", port);
+
+    for (;;) {
+        int timeout_ms = -1;
+        time_t earliest = pending_earliest();
+        if (earliest) {
+            time_t wait = earliest - now_seconds();
+            timeout_ms = wait > 0 ? (int)(wait * 1000) : 0;
+        }
+
+        if (poll(fds, 2, timeout_ms) < 0) { perror("poll"); continue; }
+
+        if (fds[0].revents & POLLIN) handle_client(sock, up_sock, &cache);
+        if (fds[1].revents & POLLIN) handle_upstream(up_sock, sock, &cache);
+        expire_pending(sock, now_seconds());
     }
 
+    close(up_sock);
     close(sock);
     return 0;
 }
