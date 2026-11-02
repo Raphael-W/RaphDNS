@@ -142,6 +142,12 @@ static void read_rdata(bit_reader *r, dns_record *rec) {
     memcpy(rec->rdata, tmp, rec->rdlength);
 }
 
+bool record_rdata_name(const dns_record *rec, char *out, size_t out_size) {
+    bit_reader r = {.buf = rec->rdata, .size = rec->rdlength, .bit = 0, .ok = true};
+    read_name(&r, out, out_size);
+    return r.ok;
+}
+
 static void read_record(bit_reader *r, dns_record *rec) {
     read_name(r, rec->name, sizeof rec->name);
     rec->type = read_bits(r, 16);

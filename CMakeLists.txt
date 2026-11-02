@@ -9,7 +9,8 @@ add_executable(dns
         src/packet.c
         src/network.c
         src/cache.c
-        src/pending.c)
+        src/pending.c
+        src/resolver.c)
 
 target_include_directories(dns PRIVATE include)
 target_compile_options(dns PRIVATE -Wall -Wextra -fsanitize=address,undefined -g)

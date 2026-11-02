@@ -17,6 +17,7 @@
 #define BUF_SIZE 4096
 #define RESOLVER_IP_UNI "152.78.255.75"
 #define RESOLVER_IP "1.1.1.1"
+#define QUERY_TIMEOUT_SECONDS 2
 
 static const char *dns_type_name(uint16_t type) {
     switch (type) {
@@ -232,6 +233,49 @@ static void handle_upstream(int sock_up, int sock, cache *c) {
             free_dns_packet(&reply);
         }
     }
+}
+
+// Sends query to ip:53 and blocks until a response arrives or the timeout passes
+// Returns the length of the response written to buf, or -1 on failure
+int network_query(const char *ip, const uint8_t *query, size_t query_len, uint8_t *buf, size_t buf_size) {
+    struct sockaddr_in server;
+    if (!make_addr(ip, 53, &server)) {
+        fprintf(stderr, "Invalid server IP: %s\n", ip);
+        return -1;
+    }
+
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        perror("socket");
+        return -1;
+    }
+
+    // UDP packets can be lost, so without a timeout recv could wait forever
+    struct timeval timeout = {.tv_sec = QUERY_TIMEOUT_SECONDS};
+    if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout) < 0) {
+        perror("setsockopt");
+        close(sock);
+        return -1;
+    }
+
+    // Connecting a UDP socket makes the kernel drop packets from any other address
+    if (connect(sock, (struct sockaddr *)&server, sizeof server) < 0) {
+        perror("connect");
+        close(sock);
+        return -1;
+    }
+
+    if (send(sock, query, query_len, 0) < 0) {
+        perror("send");
+        close(sock);
+        return -1;
+    }
+
+    ssize_t n = recv(sock, buf, buf_size, 0);
+    if (n < 0) perror("recv");
+
+    close(sock);
+    return (int)n;
 }
 
 int network_listen(int port) {
