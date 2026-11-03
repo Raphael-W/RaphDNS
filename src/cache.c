@@ -5,19 +5,9 @@
 #include <string.h>
 
 #define MAX_LOAD_FACTOR 0.75
-#define FNV_OFFSET 0xcbf29ce484222325ULL
 #define TTL_MAX 86400
 
 // HASHING
-// Continues the FNV-1a hash h over len bytes of data, returning the new hash
-static uint64_t fnv1a(uint64_t h, const uint8_t *data, const size_t len) {
-     for (size_t i = 0; i < len; i++) {
-          h ^= data[i];
-          h *= 0x100000001b3ULL;
-     }
-     return h;
-}
-
 // Returns the hash of a DNS question (case-insensitive name + type + class)
 static uint64_t key_hash(const dns_question *q) {
      uint64_t h = FNV_OFFSET;

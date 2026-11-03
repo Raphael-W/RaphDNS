@@ -3,6 +3,7 @@
 #include "cache.h"
 #include "helpers.h"
 #include "pending.h"
+#include "blocklist.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -106,7 +107,7 @@ static bool send_to_server(const int sock, const char *ip, const uint8_t *packet
 }
 
 // Sends SERVFAIL to the client and removes the query and any parent queries from pending
-static void fail_query(const int sock, query *q) {
+static void fail_query(const int sock, query *q, const int rcode) {
     // A failed child lookup fails the whole chain, up to the query the client made
     while (q->parent) {
         query *parent = q->parent;
@@ -116,7 +117,7 @@ static void fail_query(const int sock, query *q) {
 
     uint8_t buf[BUF_SIZE];
     const dns_packet p = {.id = q->client_id, .rd = 1, .qd_count = 1, .question = q->original};
-    const int n = make_error(&p, DNS_RCODE_SERVFAIL, buf, sizeof buf);
+    const int n = make_error(&p, rcode, buf, sizeof buf);
     if (n > 0) { sendto(sock, buf, n, 0, (struct sockaddr *)&q->client, q->client_len); }
     pending_remove(q);
 }
@@ -131,7 +132,7 @@ static void expire_pending(const int sock, const int sock_up, const time_t now) 
 
         if (resolver_on_timeout(&q, out, sizeof out, &out_len, next_ip) != RESOLVE_SEND ||
             !send_to_server(sock_up, next_ip, out, out_len)) {
-            fail_query(sock, q);
+            fail_query(sock, q, DNS_RCODE_SERVFAIL);
         }
     }
 }
@@ -144,8 +145,21 @@ static bool from_server(const struct sockaddr_in *from, const char *ip) {
             from->sin_port == expected.sin_port;
 }
 
+static bool reply_is_blocked(const dns_packet *p, list *l) {
+    for (int i = 0; i < p->an_count; i++) {
+        const dns_record *rec = &p->answers[i];
+        char target[256];
+        if (rec->type == DNS_TYPE_CNAME &&
+            record_rdata_name(rec, target, sizeof target) &&
+            list_blocks(target, l)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Reads all waiting client packets: answers each query from the cache, or starts resolving it if it isn't cached
-static void handle_client(int sock, int sock_up, cache *c) {
+static void handle_client(int sock, int sock_up, cache *c, list *blocklist) {
     // Fetches all packets until EAGAIN (no more to fetch)
     for (;;) {
         uint8_t buf[BUF_SIZE];
@@ -180,6 +194,11 @@ static void handle_client(int sock, int sock_up, cache *c) {
         // There should only ever be one question (despite what the existence of qd_count may suggest)
         if (packet.qd_count != 1) {
             response_length = make_error(&packet, DNS_RCODE_FORMERR, response_buf, sizeof response_buf);
+        }
+
+        else if (list_blocks(packet.question.name, blocklist)) {
+            response_length = make_error(&packet, DNS_RCODE_NXDOMAIN, response_buf, sizeof response_buf);
+            printf("Blocked %s request for %s\n", dns_type_name(packet.question.type), packet.question.name);
         }
 
         else { // Valid request
@@ -227,7 +246,7 @@ static void handle_client(int sock, int sock_up, cache *c) {
 
 // Reads all waiting nameserver responses and moves each one's lookup on to its next step
 // Replies to the client and caches the result once a lookup is finished
-static void handle_upstream(const int sock_up, const int sock, cache *c) {
+static void handle_upstream(const int sock_up, const int sock, cache *c, list *blocklist) {
     // Fetches until EAGAIN (no more to fetch)
     for (;;) {
         uint8_t buf[BUF_SIZE];
@@ -252,6 +271,14 @@ static void handle_upstream(const int sock_up, const int sock, cache *c) {
             free_dns_packet(&reply);
             continue;
         }
+
+        if (!q->parent && reply_is_blocked(&reply, blocklist)) {
+            printf("Blocked CNAME while resolving %s\n", q->original.name);
+            free_dns_packet(&reply);
+            fail_query(sock, q, DNS_RCODE_NXDOMAIN);
+            continue;
+        }
+
 
         uint8_t out[512];
         int out_len;
@@ -280,7 +307,7 @@ static void handle_upstream(const int sock_up, const int sock, cache *c) {
 
         else {
             free_dns_packet(&reply);
-            fail_query(sock, q);
+            fail_query(sock, q, DNS_RCODE_SERVFAIL);
         }
     }
 }
@@ -330,7 +357,7 @@ int network_query(const char *ip, const uint8_t *query, const size_t query_len, 
 
 // Creates both sockets, then polls them forever, handling queries, responses and timeouts
 // Returns 1 if a socket can't be opened
-int network_listen(const int port) {
+int network_listen(const int port, list *blocklist) {
     cache cache = cache_create(8);
     if (cache.bucket_count == 0) {
         fprintf(stderr, "Failed to allocate cache\n");
@@ -360,8 +387,8 @@ int network_listen(const int port) {
 
         if (poll(fds, 2, timeout_ms) < 0) { perror("poll"); continue; }
 
-        if (fds[0].revents & POLLIN) handle_client(sock, up_sock, &cache);
-        if (fds[1].revents & POLLIN) handle_upstream(up_sock, sock, &cache);
+        if (fds[0].revents & POLLIN) handle_client(sock, up_sock, &cache, blocklist);
+        if (fds[1].revents & POLLIN) handle_upstream(up_sock, sock, &cache, blocklist);
         expire_pending(sock, up_sock, now_seconds());
     }
 

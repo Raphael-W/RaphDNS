@@ -10,8 +10,10 @@ add_executable(dns
         src/network.c
         src/cache.c
         src/pending.c
-        src/resolver.c)
+        src/resolver.c
+        src/blocklist.c)
 
 target_include_directories(dns PRIVATE include)
 target_compile_options(dns PRIVATE -Wall -Wextra -fsanitize=address,undefined -g)
 target_link_options(dns PRIVATE -fsanitize=address,undefined)
+target_compile_definitions(dns PRIVATE BLOCKLIST_DIR="${PROJECT_SOURCE_DIR}/blocklists")
