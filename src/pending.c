@@ -33,7 +33,7 @@ void pending_remove(query *q) {
 
 query *pending_next_expired(time_t now) {
     for (int i = 0; i < PENDING_SIZE; i++) {
-        if (table[i].in_use && table[i].expires_at <= now) {
+        if (!table[i].waiting && table[i].in_use && table[i].expires_at <= now) {
             return &table[i];
         }
     }
@@ -43,7 +43,7 @@ query *pending_next_expired(time_t now) {
 time_t pending_earliest(void) {
     time_t earliest = 0;
     for (int i = 0; i < PENDING_SIZE; i++) {
-        if (table[i].in_use && (earliest == 0 || table[i].expires_at < earliest)) {
+        if (!table[i].waiting && table[i].in_use && (earliest == 0 || table[i].expires_at < earliest)) {
             earliest = table[i].expires_at;
         }
     }

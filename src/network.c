@@ -14,10 +14,9 @@
 #include <fcntl.h>
 #include <errno.h>
 
+#include "resolver.h"
+
 #define BUF_SIZE 4096
-#define RESOLVER_IP_UNI "152.78.255.75"
-#define RESOLVER_IP "1.1.1.1"
-#define QUERY_TIMEOUT_SECONDS 2
 
 static const char *dns_type_name(uint16_t type) {
     switch (type) {
@@ -45,12 +44,6 @@ static int make_error(const dns_packet *query, uint8_t rcode, uint8_t *out, size
     fail.an_count = fail.ns_count = fail.ar_count = 0;
     return create_dns_packet(out, out_size, &fail);
 }
-
-static void set_packet_id(uint8_t *buf, const uint16_t id) {
-    buf[0] = id >> 8;
-    buf[1] = id & 0xFF;
-}
-
 // SOCKET SETUP
 
 // Non-blocking, so reads return EAGAIN instead of waiting when nothing has arrived
@@ -96,35 +89,50 @@ static int open_listener(int port) {
 }
 
 // Socket for talking to the upstream resolver
-static int open_upstream(const char *ip) {
-    int sock = udp_socket();
-    if (sock < 0) return -1;
-
-    struct sockaddr_in server;
-    if (!make_addr(ip, 53, &server)) {
-        fprintf(stderr, "Invalid upstream IP: %s\n", ip);
-        close(sock);
-        return -1;
-    }
-
-    // Connecting a UDP socket makes the kernel drop packets from any other address
-    if (connect(sock, (struct sockaddr *)&server, sizeof server) < 0) {
-        perror("connect");
-        close(sock);
-        return -1;
-    }
-    return sock;
+static int open_upstream() {
+    return udp_socket();
 }
 
-static void expire_pending(int sock, time_t now) {
-    query *q;
-    uint8_t buf[BUF_SIZE];
-    while ((q = pending_next_expired(now))) {
-        dns_packet p = {.id = q->client_id, .rd = 1, .qd_count = 1, .question = q->question};
-        int n = make_error(&p, DNS_RCODE_SERVFAIL, buf, sizeof buf);
-        if (n > 0) { sendto(sock, buf, n, 0, (struct sockaddr *)&q->client, q->client_len); }
+static bool send_to_server(int sock, const char *ip, const uint8_t *packet, int len) {
+    struct sockaddr_in server;
+    if (!make_addr(ip, 53, &server)) return false;
+    return sendto(sock, packet, len, 0, (struct sockaddr *)&server, sizeof server) >= 0;
+}
+
+static void fail_query(int sock, query *q) {
+    // A failed child lookup fails the whole chain, up to the query the client made
+    while (q->parent) {
+        query *parent = q->parent;
         pending_remove(q);
+        q = parent;
     }
+
+    uint8_t buf[BUF_SIZE];
+    dns_packet p = {.id = q->client_id, .rd = 1, .qd_count = 1, .question = q->original};
+    int n = make_error(&p, DNS_RCODE_SERVFAIL, buf, sizeof buf);
+    if (n > 0) { sendto(sock, buf, n, 0, (struct sockaddr *)&q->client, q->client_len); }
+    pending_remove(q);
+}
+
+static void expire_pending(int sock, int sock_up, time_t now) {
+    query *q;
+    while ((q = pending_next_expired(now))) {
+        uint8_t out[512];
+        int out_len;
+        char next_ip[INET_ADDRSTRLEN];
+
+        if (resolver_on_timeout(&q, out, sizeof out, &out_len, next_ip) != RESOLVE_SEND ||
+            !send_to_server(sock_up, next_ip, out, out_len)) {
+            fail_query(sock, q);
+        }
+    }
+}
+
+static bool from_server(const struct sockaddr_in *from, const char *ip) {
+    struct sockaddr_in expected;
+    return make_addr(ip, 53, &expected) &&
+            from->sin_addr.s_addr == expected.sin_addr.s_addr &&
+            from->sin_port == expected.sin_port;
 }
 
 static void handle_client(int sock, int sock_up, cache *c) {
@@ -173,17 +181,22 @@ static void handle_client(int sock, int sock_up, cache *c) {
                 reply.question = packet.question;
                 response_length = create_dns_packet(response_buf, sizeof response_buf, &reply);
             }
-            else { // Fetch answer upstream
-                query query = {.client=client, .client_id=packet.id, .client_len=client_len, .question=packet.question, .expires_at=now_seconds() + 2};
-                int query_id = pending_add(&query);
+            else { // Not cached: start resolving
+                query new_query = {.client=client, .client_id=packet.id, .client_len=client_len, .question=packet.question};
+                int query_id = pending_add(&new_query);
 
                 if (query_id < 0) {
                     response_length = -1;
                 }
                 else {
-                    set_packet_id(buf, query_id);
-                    if (send(sock_up, buf, n, 0) < 0) {
-                        pending_remove(pending_find(query_id));
+                    query *q = pending_find(query_id);
+                    uint8_t out[512];
+                    int out_len;
+                    char next_ip[INET_ADDRSTRLEN];
+
+                    if (resolver_start(q, out, sizeof out, &out_len, next_ip) != RESOLVE_SEND ||
+                        !send_to_server(sock_up, next_ip, out, out_len)) {
+                        pending_remove(q);
                         response_length = -1;
                     }
                 }
@@ -204,7 +217,10 @@ static void handle_client(int sock, int sock_up, cache *c) {
 static void handle_upstream(int sock_up, int sock, cache *c) {
     for (;;) {
         uint8_t buf[BUF_SIZE];
-        ssize_t n = recv(sock_up, buf, sizeof buf, 0);
+        struct sockaddr_in from;
+        socklen_t from_len = sizeof from;
+
+        ssize_t n = recvfrom(sock_up, buf, sizeof buf, 0, (struct sockaddr *)&from, &from_len);
         if (n < 0) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) perror("recv");
             break;
@@ -212,7 +228,7 @@ static void handle_upstream(int sock_up, int sock, cache *c) {
         if (n < 12) continue; // too short for a DNS header
 
         query *q = pending_find((uint16_t)(buf[0] << 8 | buf[1]));
-        if (!q) continue;
+        if (!q || !from_server(&from, q->servers[q->current])) continue;
 
         dns_packet reply = {0};
         if (parse_dns_packet(buf, n, &reply) < 0 ||
@@ -223,14 +239,34 @@ static void handle_upstream(int sock_up, int sock, cache *c) {
             continue;
         }
 
-        set_packet_id(buf, q->client_id);
-        sendto(sock, buf, n, 0, (struct sockaddr *) &q->client, q->client_len);
-        pending_remove(q);
-        if ((reply.rcode == DNS_RCODE_NOERROR || reply.rcode == DNS_RCODE_NXDOMAIN) && !reply.tc) {
-            cache_insert(c, reply);
+        uint8_t out[512];
+        int out_len;
+        char next_ip[INET_ADDRSTRLEN];
+        resolve_step step = resolver_on_response(&q, &reply, out, sizeof out, &out_len, next_ip);
+
+        if (step == RESOLVE_SEND && send_to_server(sock_up, next_ip, out, out_len)) {
+            free_dns_packet(&reply);
         }
+        else if (step == RESOLVE_DONE) {
+            resolver_add_cnames(q, &reply);
+            reply.id = q->client_id;
+            reply.rd = 1;
+            reply.ra = 1;
+            int reply_len = create_dns_packet(buf, sizeof buf, &reply);
+            if (reply_len > 0) sendto(sock, buf, reply_len, 0, (struct sockaddr *)&q->client, q->client_len);
+            pending_remove(q);
+
+            if ((reply.rcode == DNS_RCODE_NOERROR || reply.rcode == DNS_RCODE_NXDOMAIN) && !reply.tc) {
+                cache_insert(c, reply);
+            }
+            else {
+                free_dns_packet(&reply);
+            }
+        }
+
         else {
             free_dns_packet(&reply);
+            fail_query(sock, q);
         }
     }
 }
@@ -284,7 +320,7 @@ int network_listen(int port) {
     int sock = open_listener(port);
     if (sock < 0) return 1;
 
-    int up_sock = open_upstream(RESOLVER_IP);
+    int up_sock = open_upstream();
     if (up_sock < 0) { close(sock); return 1; }
 
     struct pollfd fds[2] = {
@@ -306,7 +342,7 @@ int network_listen(int port) {
 
         if (fds[0].revents & POLLIN) handle_client(sock, up_sock, &cache);
         if (fds[1].revents & POLLIN) handle_upstream(up_sock, sock, &cache);
-        expire_pending(sock, now_seconds());
+        expire_pending(sock, up_sock, now_seconds());
     }
 
     close(up_sock);
