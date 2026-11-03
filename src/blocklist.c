@@ -12,6 +12,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
+// Returns the slot index (by hashing the name), which is where probing for it starts
 static size_t index_key(const char *name, const list *l) {
     uint64_t h = FNV_OFFSET;
     for (const char *c = name; *c; c++) {
@@ -21,6 +22,8 @@ static size_t index_key(const char *name, const list *l) {
     return h % l->capacity;
 }
 
+// Adds name to the table using linear probing, growing the table if it's too full
+// Stores the pointer rather than a copy, so name must outlive l. Does nothing if name is already listed
 static void insert_name(char *name, list *l) {
     size_t index = index_key(name, l);
     size_t distance = 0;
@@ -40,6 +43,7 @@ static void insert_name(char *name, list *l) {
     }
 }
 
+// Returns true if the table contains exactly this name, ignoring case
 static bool list_contains(const char *name, const list *l) {
     size_t index = index_key(name, l);
     size_t distance = 0;
@@ -52,6 +56,8 @@ static bool list_contains(const char *name, const list *l) {
     return false;
 }
 
+// Returns a newly allocated, null-terminated copy of the file and writes its size to out_size
+// Returns NULL on failure
 static char *read_file(const char *path, size_t *out_size) {
     FILE *f = fopen(path, "rb");
     if (!f) return NULL;
@@ -73,6 +79,7 @@ static char *read_file(const char *path, size_t *out_size) {
     return buf;
 }
 
+// Returns an empty blocklist with `size` slots, or NULL if allocation fails
 list *list_create(const size_t size) {
     list *l = malloc(sizeof *l);
     if (!l) return NULL;
@@ -86,6 +93,7 @@ list *list_create(const size_t size) {
     return l;
 }
 
+// Frees the blocklist, its table and the file contents its names point into
 void list_free(list *l) {
     if (!l) return;
     free(l->names);
@@ -94,6 +102,7 @@ void list_free(list *l) {
     free(l);
 }
 
+// Returns true if name or any of its parent domains is listed
 bool list_blocks(const char *name, const list *l) {
      for (const char *p = name; p; p = strchr(p, '.'), p = p ? p + 1 : NULL) {
          if (list_contains(p, l)) return true;
@@ -101,6 +110,8 @@ bool list_blocks(const char *name, const list *l) {
     return false;
 }
 
+// Moves every name into a new table with `new_size` slots
+// Leaves the list unchanged if allocation fails
 void list_resize(list *l, const size_t new_size) {
     char* *new_names = calloc(new_size, sizeof *new_names);
     if (!new_names) return;
@@ -118,6 +129,8 @@ void list_resize(list *l, const size_t new_size) {
     free(old_names);
 }
 
+// Adds each domain in the file to l, skipping blank lines and # comments
+// l keeps the file's contents, as its names point into them. Returns 0 on success, or -1 on failure
 int load_blocklist(const char* filename, list *l) {
     size_t file_size;
     char *buf = read_file(filename, &file_size);
