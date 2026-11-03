@@ -10,7 +10,6 @@
 #include "helpers.h"
 
 #define MAX_QUERIES 32
-#define MAX_SERVERS 13
 
 // All 13 root servers
 static char* ROOT_HINTS[] = {
@@ -70,95 +69,6 @@ static int find_answer(const dns_packet *p, char ips[][INET_ADDRSTRLEN], const i
         }
     }
     return count;
-}
-
-static int resolve(const char* name, uint8_t* buf, size_t buf_size, int* queries_left);
-
-// For referrals without glue: looks up each nameserver's address from the root until one resolves
-static int resolve_nameserver(const dns_packet *p, char ips[][INET_ADDRSTRLEN], const int max, int* queries_left) {
-    for (int i = 0; i < p->ns_count; i++) {
-        char ns_name[256];
-        if (p->authority[i].type != DNS_TYPE_NS) continue;
-        if (!record_rdata_name(&p->authority[i], ns_name, sizeof ns_name)) continue;
-
-        uint8_t ns_buf[4096];
-        const int n = resolve(ns_name, ns_buf, sizeof ns_buf, queries_left);
-        if (n < 0) continue;
-
-        dns_packet ns_response = {0};
-        const int count = parse_dns_packet(ns_buf, n, &ns_response) >= 0 ? find_answer(&ns_response, ips, max): 0;
-        free_dns_packet(&ns_response);
-        if (count > 0) return count;
-    }
-    return 0;
-}
-
-// Looks up name starting from the root servers, writing the response to buf. Returns its length, or -1 on failure
-// queries_left is shared with nested nameserver lookups, so nameservers that depend on each other can't recurse forever
-static int resolve(const char* name, uint8_t* buf, const size_t buf_size, int* queries_left) {
-    char servers[MAX_SERVERS][INET_ADDRSTRLEN];
-    int server_count = copy_roots(servers, MAX_SERVERS);
-    int current = 0;
-
-    while (*queries_left > 0) {
-        (*queries_left)--;
-
-        dns_question question = {.type = DNS_TYPE_A, .class = DNS_CLASS_IN};
-        strncpy(question.name, name, sizeof question.name - 1);
-
-        uint8_t query[4096];
-        dns_packet request = {
-            .id = 1,
-            .qr = 0,
-            .opcode = DNS_OPCODE_QUERY,
-            .aa = 0, .tc = 0, .rd=0, .ra=0, .ad=0, .cd=0,
-            .rcode=DNS_RCODE_NOERROR,
-            .qd_count = 1, .an_count = 0, .ns_count = 0, .ar_count = 0,
-            .question = question
-        };
-        const int query_len = create_dns_packet(query, sizeof query, &request);
-        if (query_len < 0) return -1;
-
-        const int n = network_query(servers[current], query, query_len, buf, buf_size);
-        if (n < 0) {
-            if (++current < server_count) continue;
-            return -1;
-        }
-
-        dns_packet response = {0};
-        if (parse_dns_packet(buf, n, &response) < 0) {
-            free_dns_packet(&response);
-            if (++current < server_count) continue;
-            return -1;
-        }
-
-        if (response.rcode != DNS_RCODE_NOERROR && response.rcode != DNS_RCODE_NXDOMAIN) {
-            free_dns_packet(&response);
-            if (++current < server_count) continue;
-            return -1;
-        }
-
-        if (response.an_count > 0 || response.aa || response.rcode == DNS_RCODE_NXDOMAIN) {
-            free_dns_packet(&response);
-            return n;
-        }
-
-        server_count = find_glue(&response, servers, MAX_SERVERS);
-        if (server_count == 0) {
-            server_count = resolve_nameserver(&response, servers, MAX_SERVERS, queries_left);
-        }
-        current = 0;
-        free_dns_packet(&response);
-        if (server_count == 0) return -1;
-    }
-
-    return -1;
-}
-
-// Looks up name with a fresh query budget, writing the response to buf. Returns its length, or -1 on failure
-int resolve_host(const char* name, uint8_t* buf, const size_t buf_size) {
-    int queries_left = MAX_QUERIES;
-    return resolve(name, buf, buf_size, &queries_left);
 }
 
 // Writes the query for q's current server into out and restarts its timeout

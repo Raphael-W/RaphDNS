@@ -18,7 +18,7 @@ int main(void) {
 
     int load_status = load_blocklists(BLOCKLIST_DIR, l);
     if (load_status < 0) {
-        printf("Failed to loadin blocklist");
+        printf("Failed to load blocklist");
         return 1;
     }
 

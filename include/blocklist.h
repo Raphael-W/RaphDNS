@@ -1,7 +1,7 @@
 #ifndef DNS_BLOCKLIST_H
 #define DNS_BLOCKLIST_H
 #include <stdbool.h>
-#include <sys/_types/_size_t.h>
+#include <stddef.h>
 
 #define MAX_LOAD_FACTOR 0.5
 
