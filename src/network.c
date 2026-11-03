@@ -18,7 +18,8 @@
 
 #define BUF_SIZE 4096
 
-static const char *dns_type_name(uint16_t type) {
+// Returns the name of a DNS type, for logging
+static const char *dns_type_name(const uint16_t type) {
     switch (type) {
     case DNS_TYPE_A:     return "A";
     case DNS_TYPE_NS:    return "NS";
@@ -36,7 +37,9 @@ static const char *dns_type_name(uint16_t type) {
     }
 }
 
-static int make_error(const dns_packet *query, uint8_t rcode, uint8_t *out, size_t out_size) {
+// Writes an error response to the query into out, with the given rcode
+// Returns the response's length in bytes, or -1 on failure
+static int make_error(const dns_packet *query, const uint8_t rcode, uint8_t *out, const size_t out_size) {
     dns_packet fail = *query;
     fail.qr = 1;
     fail.ra = 1;
@@ -44,15 +47,17 @@ static int make_error(const dns_packet *query, uint8_t rcode, uint8_t *out, size
     fail.an_count = fail.ns_count = fail.ar_count = 0;
     return create_dns_packet(out, out_size, &fail);
 }
-// SOCKET SETUP
 
+// SOCKET SETUP
+// Returns a new UDP socket, or -1 on failure
 // Non-blocking, so reads return EAGAIN instead of waiting when nothing has arrived
 static int udp_socket(void) {
-    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    const int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
         perror("socket");
         return -1;
     }
+
     if (fcntl(sock, F_SETFL, O_NONBLOCK) < 0) {
         perror("fcntl");
         close(sock);
@@ -69,13 +74,13 @@ static bool make_addr(const char *ip, int port, struct sockaddr_in *out) {
     return inet_pton(AF_INET, ip, &out->sin_addr) == 1;
 }
 
-// Socket that clients send queries to
-static int open_listener(int port) {
-    int sock = udp_socket();
+// Returns the socket that clients send queries to, bound to 127.0.0.1:port, or -1 on failure
+static int open_listener(const int port) {
+    const int sock = udp_socket();
     if (sock < 0) return -1;
 
     // Allows server to be restarted without waiting for the port to free up
-    int yes = 1;
+    const int yes = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);
 
     struct sockaddr_in addr;
@@ -88,18 +93,20 @@ static int open_listener(int port) {
     return sock;
 }
 
-// Socket for talking to the upstream resolver
+// Returns the socket for querying nameservers, or -1 on failure
 static int open_upstream() {
     return udp_socket();
 }
 
-static bool send_to_server(int sock, const char *ip, const uint8_t *packet, int len) {
+// Sends a packet to ip:53. Returns a success bool
+static bool send_to_server(const int sock, const char *ip, const uint8_t *packet, const int len) {
     struct sockaddr_in server;
     if (!make_addr(ip, 53, &server)) return false;
     return sendto(sock, packet, len, 0, (struct sockaddr *)&server, sizeof server) >= 0;
 }
 
-static void fail_query(int sock, query *q) {
+// Sends SERVFAIL to the client and removes the query and any parent queries from pending
+static void fail_query(const int sock, query *q) {
     // A failed child lookup fails the whole chain, up to the query the client made
     while (q->parent) {
         query *parent = q->parent;
@@ -108,13 +115,14 @@ static void fail_query(int sock, query *q) {
     }
 
     uint8_t buf[BUF_SIZE];
-    dns_packet p = {.id = q->client_id, .rd = 1, .qd_count = 1, .question = q->original};
-    int n = make_error(&p, DNS_RCODE_SERVFAIL, buf, sizeof buf);
+    const dns_packet p = {.id = q->client_id, .rd = 1, .qd_count = 1, .question = q->original};
+    const int n = make_error(&p, DNS_RCODE_SERVFAIL, buf, sizeof buf);
     if (n > 0) { sendto(sock, buf, n, 0, (struct sockaddr *)&q->client, q->client_len); }
     pending_remove(q);
 }
 
-static void expire_pending(int sock, int sock_up, time_t now) {
+// Retries each timed out query on its next server, failing it if that isn't possible
+static void expire_pending(const int sock, const int sock_up, const time_t now) {
     query *q;
     while ((q = pending_next_expired(now))) {
         uint8_t out[512];
@@ -128,6 +136,7 @@ static void expire_pending(int sock, int sock_up, time_t now) {
     }
 }
 
+// Returns whether the from address is ip:53
 static bool from_server(const struct sockaddr_in *from, const char *ip) {
     struct sockaddr_in expected;
     return make_addr(ip, 53, &expected) &&
@@ -135,7 +144,9 @@ static bool from_server(const struct sockaddr_in *from, const char *ip) {
             from->sin_port == expected.sin_port;
 }
 
+// Reads all waiting client packets: answers each query from the cache, or starts resolving it if it isn't cached
 static void handle_client(int sock, int sock_up, cache *c) {
+    // Fetches all packets until EAGAIN (no more to fetch)
     for (;;) {
         uint8_t buf[BUF_SIZE];
 
@@ -214,13 +225,16 @@ static void handle_client(int sock, int sock_up, cache *c) {
     }
 }
 
-static void handle_upstream(int sock_up, int sock, cache *c) {
+// Reads all waiting nameserver responses and moves each one's lookup on to its next step
+// Replies to the client and caches the result once a lookup is finished
+static void handle_upstream(const int sock_up, const int sock, cache *c) {
+    // Fetches until EAGAIN (no more to fetch)
     for (;;) {
         uint8_t buf[BUF_SIZE];
         struct sockaddr_in from;
         socklen_t from_len = sizeof from;
 
-        ssize_t n = recvfrom(sock_up, buf, sizeof buf, 0, (struct sockaddr *)&from, &from_len);
+        const ssize_t n = recvfrom(sock_up, buf, sizeof buf, 0, (struct sockaddr *)&from, &from_len);
         if (n < 0) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) perror("recv");
             break;
@@ -242,7 +256,7 @@ static void handle_upstream(int sock_up, int sock, cache *c) {
         uint8_t out[512];
         int out_len;
         char next_ip[INET_ADDRSTRLEN];
-        resolve_step step = resolver_on_response(&q, &reply, out, sizeof out, &out_len, next_ip);
+        const resolve_step step = resolver_on_response(&q, &reply, out, sizeof out, &out_len, next_ip);
 
         if (step == RESOLVE_SEND && send_to_server(sock_up, next_ip, out, out_len)) {
             free_dns_packet(&reply);
@@ -252,7 +266,7 @@ static void handle_upstream(int sock_up, int sock, cache *c) {
             reply.id = q->client_id;
             reply.rd = 1;
             reply.ra = 1;
-            int reply_len = create_dns_packet(buf, sizeof buf, &reply);
+            const int reply_len = create_dns_packet(buf, sizeof buf, &reply);
             if (reply_len > 0) sendto(sock, buf, reply_len, 0, (struct sockaddr *)&q->client, q->client_len);
             pending_remove(q);
 
@@ -273,21 +287,21 @@ static void handle_upstream(int sock_up, int sock, cache *c) {
 
 // Sends query to ip:53 and blocks until a response arrives or the timeout passes
 // Returns the length of the response written to buf, or -1 on failure
-int network_query(const char *ip, const uint8_t *query, size_t query_len, uint8_t *buf, size_t buf_size) {
+int network_query(const char *ip, const uint8_t *query, const size_t query_len, uint8_t *buf, const size_t buf_size) {
     struct sockaddr_in server;
     if (!make_addr(ip, 53, &server)) {
         fprintf(stderr, "Invalid server IP: %s\n", ip);
         return -1;
     }
 
-    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    const int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
         perror("socket");
         return -1;
     }
 
     // UDP packets can be lost, so without a timeout recv could wait forever
-    struct timeval timeout = {.tv_sec = QUERY_TIMEOUT_SECONDS};
+    const struct timeval timeout = {.tv_sec = QUERY_TIMEOUT_SECONDS};
     if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout) < 0) {
         perror("setsockopt");
         close(sock);
@@ -307,20 +321,26 @@ int network_query(const char *ip, const uint8_t *query, size_t query_len, uint8_
         return -1;
     }
 
-    ssize_t n = recv(sock, buf, buf_size, 0);
+    const ssize_t n = recv(sock, buf, buf_size, 0);
     if (n < 0) perror("recv");
 
     close(sock);
     return (int)n;
 }
 
-int network_listen(int port) {
+// Creates both sockets, then polls them forever, handling queries, responses and timeouts
+// Returns 1 if a socket can't be opened
+int network_listen(const int port) {
     cache cache = cache_create(8);
+    if (cache.bucket_count == 0) {
+        fprintf(stderr, "Failed to allocate cache\n");
+        return 1;
+    }
 
-    int sock = open_listener(port);
+    const int sock = open_listener(port);
     if (sock < 0) return 1;
 
-    int up_sock = open_upstream();
+    const int up_sock = open_upstream();
     if (up_sock < 0) { close(sock); return 1; }
 
     struct pollfd fds[2] = {
@@ -332,9 +352,9 @@ int network_listen(int port) {
 
     for (;;) {
         int timeout_ms = -1;
-        time_t earliest = pending_earliest();
+        const time_t earliest = pending_earliest();
         if (earliest) {
-            time_t wait = earliest - now_seconds();
+            const time_t wait = earliest - now_seconds();
             timeout_ms = wait > 0 ? (int)(wait * 1000) : 0;
         }
 

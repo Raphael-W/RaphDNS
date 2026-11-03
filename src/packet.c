@@ -4,68 +4,73 @@
 #include <string.h>
 #include <arpa/inet.h>
 
+// BIT READING & WRITING
 typedef struct {
-    uint8_t *buf;
+    uint8_t *buf; // buffer to write to
     size_t size;  // bytes
     size_t bit;   // current position, in bits
     bool ok;      // false if we ran past the end
 } bit_writer;
 
 typedef struct {
-    const uint8_t *buf;
-    size_t size;
-    size_t bit;
-    bool ok;
+    const uint8_t *buf; // buffer to read from
+    size_t size;        // bytes
+    size_t bit;         // current position, in bits
+    bool ok;            // false if we ran past the end
 } bit_reader;
 
-// HELPER FUNCTIONS
-
-static uint32_t read_bits(bit_reader *r, unsigned count) {
+// Returns the next `count` bits from the buffer in r, clearing r->ok if it runs out
+static uint32_t read_bits(bit_reader *r, const unsigned count) {
       uint32_t value = 0;
       for (unsigned i = 0; i < count; i++) {
-          size_t byte = r->bit / 8;
-          unsigned shift = 7 - r->bit % 8;
-          if (byte >= r->size) {
-              r->ok = false; return 0;
-          }
+          const size_t byte = r->bit / 8;
+          const unsigned shift = 7 - r->bit % 8;
+
+          if (byte >= r->size) { r->ok = false; return 0; } // exceeded size
           value = (value << 1) | ((r->buf[byte] >> shift) & 1);
           r->bit++;
       }
       return value;
 }
 
-static void write_bits(bit_writer *w, uint32_t value, unsigned count) {
-      for (int i = count - 1; i >= 0; i--) {
-          size_t byte = w->bit / 8;
-          unsigned shift = 7 - w->bit % 8;
-          if (byte >= w->size) { w->ok = false; return; }
-          if ((value >> i) & 1)
+// Writes the lowest `count` bits of value to the buffer in w, clearing w->ok if it runs out of space
+static void write_bits(bit_writer *w, const uint32_t value, const unsigned count) {
+      for (int i = (int)count - 1; i >= 0; i--) {
+          const size_t byte = w->bit / 8;
+          const unsigned shift = 7 - w->bit % 8;
+          if (byte >= w->size) { w->ok = false; return; } // exceeded size
+          if ((value >> i) & 1) {
               w->buf[byte] |= 1u << shift;
-          else
+          }
+          else {
               w->buf[byte] &= ~(1u << shift);
+          }
+
           w->bit++;
       }
 }
 
-static void read_name(bit_reader *r, char *out, size_t out_size) {
+// Reads a hostname from the buffer in r into out, following any compression pointers
+static void read_name(bit_reader *r, char *out, const size_t out_size) {
     size_t n = 0;
     size_t resume = 0;
     int jumps = 0;
 
     for (;;) {
-        uint8_t len = read_bits(r, 8);
+        const uint8_t len = read_bits(r, 8);
         if (!r->ok || len == 0) break;
         if ((len & 0xC0) == 0xC0) {
-            size_t offset = ((len & 0x3F) << 8) | read_bits(r, 8);
+            const size_t offset = ((len & 0x3F) << 8) | read_bits(r, 8);
             if (jumps == 0) resume = r->bit;
-            if (++jumps > 16) {r->ok = false; break;}
+            if (++jumps > 16) { r->ok = false; break; }
             r->bit = offset * 8;
             continue;
         }
-        if (len > 63) {r->ok = false; break;}
 
+        if (len > 63) { r->ok = false; break; }
         if (n + len + 2 > out_size) { r->ok = false; break; }
         if (n) out[n++] = '.';
+
         for (uint8_t i = 0; i < len; i++)
             out[n++] = (char) read_bits(r, 8);
     }
@@ -73,29 +78,34 @@ static void read_name(bit_reader *r, char *out, size_t out_size) {
     if (jumps) r->bit = resume;
 }
 
+// Writes a hostname to the buffer in w as DNS labels, without using compression
 static void write_name(bit_writer *w, const char *in) {
     while (*in) {
-        size_t len = strcspn(in, ".");
+        const size_t len = strcspn(in, ".");
         if (len == 0 || len > 63) {
             w->ok = false; return;
         }
         write_bits(w, len, 8);
-        for (size_t i = 0; i < len; i++)
+        for (size_t i = 0; i < len; i++) {
             write_bits(w, (uint8_t)in[i], 8);
+        }
         in += len;
         if (*in == '.') in++;
     }
     write_bits(w, 0, 8);
 }
 
+// Copies a hostname from r to w, expanding any compression pointers
 static void copy_name(bit_reader *r, bit_writer *w) {
     char name[256];
     read_name(r, name, sizeof name);
     write_name(w, name);
 }
 
+// Reads a record's RDATA from r into a newly allocated rec->rdata
+// Names are expanded, as compression pointers only make sense inside the original packet
 static void read_rdata(bit_reader *r, dns_record *rec) {
-    size_t end = r->bit + (size_t) rec->rdlength * 8;
+    const size_t end = r->bit + (size_t) rec->rdlength * 8;
     uint8_t tmp[600];
     bit_writer w = {.buf = tmp, .size = sizeof tmp, .bit = 0, .ok = true};
 
@@ -105,10 +115,12 @@ static void read_rdata(bit_reader *r, dns_record *rec) {
         case DNS_TYPE_PTR:
             copy_name(r, &w);
             break;
+
         case DNS_TYPE_MX:
             write_bits(&w, read_bits(r, 16), 16);
             copy_name(r, &w);
             break;
+
         case DNS_TYPE_SOA:
             copy_name(r, &w);
             copy_name(r, &w);
@@ -116,6 +128,7 @@ static void read_rdata(bit_reader *r, dns_record *rec) {
                 write_bits(&w, read_bits(r, 32), 32);
             }
             break;
+
         default:
             rec->rdata = malloc(rec->rdlength);
             if (!rec->rdata && rec->rdlength != 0) {
@@ -142,14 +155,17 @@ static void read_rdata(bit_reader *r, dns_record *rec) {
     memcpy(rec->rdata, tmp, rec->rdlength);
 }
 
-bool record_rdata_name(const dns_record *rec, char *out, size_t out_size) {
+// Reads a name from the record's rdata into out. Returns a success bool
+bool record_rdata_name(const dns_record *rec, char *out, const size_t out_size) {
     bit_reader r = {.buf = rec->rdata, .size = rec->rdlength, .bit = 0, .ok = true};
     read_name(&r, out, out_size);
     return r.ok;
 }
 
+// Reads a single record from r into rec
 static void read_record(bit_reader *r, dns_record *rec) {
     read_name(r, rec->name, sizeof rec->name);
+
     rec->type = read_bits(r, 16);
     rec->class = read_bits(r, 16);
     rec->ttl = read_bits(r, 32);
@@ -158,18 +174,22 @@ static void read_record(bit_reader *r, dns_record *rec) {
     read_rdata(r, rec);
 }
 
-static dns_record *read_records(bit_reader *r, uint16_t count) {
+// Returns a newly allocated list of `count` records read from r, or NULL if allocation fails
+static dns_record *read_records(bit_reader *r, const uint16_t count) {
     dns_record *records = calloc(count, sizeof *records);
     if (!records && count != 0) {
         r->ok = false;
         return NULL;
     }
+
     for (uint16_t i = 0; i < count && r -> ok; i++) {
         read_record(r, &records[i]);
     }
+
     return records;
 }
 
+// Writes a record to a packet buffer
 static void write_record(bit_writer *w, const dns_record *rec) {
     write_name(w, rec->name);
     write_bits(w, rec->type, 16);
@@ -182,74 +202,17 @@ static void write_record(bit_writer *w, const dns_record *rec) {
     }
 }
 
-static void write_records(bit_writer *w, const dns_record *records, uint16_t count) {
+// Writes a list of records to a packet buffer
+static void write_records(bit_writer *w, const dns_record *records, const uint16_t count) {
     for (uint16_t i = 0; i < count && w->ok; i++) {
         write_record(w, &records[i]);
     }
 }
 
-void print_record(const dns_record *r, char* name) {
-    printf("\n%s:\n", name);
-    printf("Name: %s\n", r->name);
-    printf("Type: %u\n", r->type);
-    printf("Class: %u\n", r->class);
-    printf("TTL: %u\n", r->ttl);
-    printf("Resource Length: %u\n", r->rdlength);
-    char ip[INET6_ADDRSTRLEN];
-    if (r->type == 1 && r->rdlength == 4) { // A
-        printf("Resource Data: %s\n", inet_ntop(AF_INET, r->rdata, ip, sizeof ip));
-    }
-    else if (r->type == 28 && r->rdlength == 16) { // AAAA
-        printf("Resource Data: %s\n", inet_ntop(AF_INET6, r->rdata, ip, sizeof ip));
-    }
-    else {
-        printf("Resource Data: ");
-        for (uint16_t i = 0; i < r->rdlength; i++)
-            printf("%02x ", r->rdata[i]);
-        printf("\n");
-    }
-}
-
-void print_dns_packet(const dns_packet *p) {
-    printf("Header: \n");
-    printf("ID: %u\n", p->id);
-    printf("Query/response: %d\n", p->qr);
-    printf("Opcode: %d\n", p->opcode);
-    printf("Authoritive Answer: %d\n", p->aa);
-    printf("Truncate Flag: %d\n", p->tc);
-    printf("Recursion Desired: %d\n", p->rd);
-    printf("Recursion Available: %d\n", p->ra);
-    printf("Authenticated Data: %d\n", p->ad);
-    printf("Checking Disabled: %d\n", p->cd);
-    printf("Error Code: %d\n", p->rcode);
-    printf("Question Count: %u\n", p->qd_count);
-    printf("Answer Record Count: %u\n", p->an_count);
-    printf("Authority Record Count: %u\n", p->ns_count);
-    printf("Additional Record Count: %u\n", p->ar_count);
-
-    if (p->qd_count == 1) {
-        printf("\nQuestion: \n");
-        printf("Name: %s\n", p->question.name);
-        printf("Type: %u\n", p->question.type);
-        printf("Class: %u\n", p->question.class);
-    }
-
-    for (int i = 0; i < p->an_count; i++) {
-        print_record(&p->answers[i], "Answer Record");
-    }
-
-    for (int i = 0; i < p->ns_count; i++) {
-        print_record(&p->authority[i], "Authority Record");
-    }
-
-    for (int i = 0; i < p->ar_count; i++) {
-        print_record(&p->additional[i], "Additional Record");
-    }
-}
-
 //DNS PACKET HANDLING
-
-int parse_dns_packet(const uint8_t* buf, size_t buf_size, dns_packet *p) {
+// Parses an entire packet buffer into p. Returns the number of bytes read, or -1 if it's malformed
+// p must be passed to free_dns_packet afterwards, even on failure
+int parse_dns_packet(const uint8_t* buf, const size_t buf_size, dns_packet *p) {
     memset(p, 0, sizeof *p); // Zero packet data
     bit_reader r = {.buf = buf, .size = buf_size, .bit = 0, .ok = true};
 
@@ -285,7 +248,8 @@ int parse_dns_packet(const uint8_t* buf, size_t buf_size, dns_packet *p) {
     return r.ok ? (int)((r.bit + 7) / 8) : -1;
 }
 
-int create_dns_packet(uint8_t* buf, size_t buf_size, dns_packet* p) {
+// Serialises p into buf. Returns the packet's length in bytes, or -1 on failure
+int create_dns_packet(uint8_t* buf, const size_t buf_size, const dns_packet* p) {
     bit_writer w = {.buf = buf, .size = buf_size, .bit = 0, .ok = true};
     memset(buf, 0, 12);
 
@@ -319,7 +283,8 @@ int create_dns_packet(uint8_t* buf, size_t buf_size, dns_packet* p) {
     return w.ok ? (int)((w.bit + 7) / 8) : -1;
 }
 
-static void free_records(dns_record *records, uint16_t count) {
+// Frees a list of records and their rdata
+static void free_records(dns_record *records, const uint16_t count) {
     if (!records) return;
     for (uint16_t i = 0; i < count; i++) {
         free(records[i].rdata);
@@ -327,6 +292,7 @@ static void free_records(dns_record *records, uint16_t count) {
     free(records);
 }
 
+// Frees all of a packet's records. p itself isn't freed
 void free_dns_packet(dns_packet *p) {
     free_records(p->answers, p->an_count);
     free_records(p->authority, p->ns_count);
@@ -334,4 +300,66 @@ void free_dns_packet(dns_packet *p) {
     p->answers = NULL;
     p->authority = NULL;
     p->additional = NULL;
+}
+
+// PRINTING
+// Used for debugging: prints all fields in a DNS record (e.g. additional, authority)
+void print_record(const dns_record *r, char* name) {
+    printf("\n%s:\n", name);
+    printf("Name: %s\n", r->name);
+    printf("Type: %u\n", r->type);
+    printf("Class: %u\n", r->class);
+    printf("TTL: %u\n", r->ttl);
+    printf("Resource Length: %u\n", r->rdlength);
+    char ip[INET6_ADDRSTRLEN];
+    if (r->type == 1 && r->rdlength == 4) { // A
+        printf("Resource Data: %s\n", inet_ntop(AF_INET, r->rdata, ip, sizeof ip));
+    }
+    else if (r->type == 28 && r->rdlength == 16) { // AAAA
+        printf("Resource Data: %s\n", inet_ntop(AF_INET6, r->rdata, ip, sizeof ip));
+    }
+    else {
+        printf("Resource Data: ");
+        for (uint16_t i = 0; i < r->rdlength; i++)
+            printf("%02x ", r->rdata[i]);
+        printf("\n");
+    }
+}
+
+// Used for debugging: prints all fields in a DNS packet
+void print_dns_packet(const dns_packet *p) {
+    printf("Header: \n");
+    printf("ID: %u\n", p->id);
+    printf("Query/response: %d\n", p->qr);
+    printf("Opcode: %d\n", p->opcode);
+    printf("Authoritive Answer: %d\n", p->aa);
+    printf("Truncate Flag: %d\n", p->tc);
+    printf("Recursion Desired: %d\n", p->rd);
+    printf("Recursion Available: %d\n", p->ra);
+    printf("Authenticated Data: %d\n", p->ad);
+    printf("Checking Disabled: %d\n", p->cd);
+    printf("Error Code: %d\n", p->rcode);
+    printf("Question Count: %u\n", p->qd_count);
+    printf("Answer Record Count: %u\n", p->an_count);
+    printf("Authority Record Count: %u\n", p->ns_count);
+    printf("Additional Record Count: %u\n", p->ar_count);
+
+    if (p->qd_count == 1) {
+        printf("\nQuestion: \n");
+        printf("Name: %s\n", p->question.name);
+        printf("Type: %u\n", p->question.type);
+        printf("Class: %u\n", p->question.class);
+    }
+
+    for (int i = 0; i < p->an_count; i++) {
+        print_record(&p->answers[i], "Answer Record");
+    }
+
+    for (int i = 0; i < p->ns_count; i++) {
+        print_record(&p->authority[i], "Authority Record");
+    }
+
+    for (int i = 0; i < p->ar_count; i++) {
+        print_record(&p->additional[i], "Additional Record");
+    }
 }

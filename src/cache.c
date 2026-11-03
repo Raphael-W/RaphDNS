@@ -9,8 +9,8 @@
 #define TTL_MAX 86400
 
 // HASHING
-
-static uint64_t fnv1a(uint64_t h, const uint8_t *data, size_t len) {
+// Continues the FNV-1a hash h over len bytes of data, returning the new hash
+static uint64_t fnv1a(uint64_t h, const uint8_t *data, const size_t len) {
      for (size_t i = 0; i < len; i++) {
           h ^= data[i];
           h *= 0x100000001b3ULL;
@@ -18,6 +18,7 @@ static uint64_t fnv1a(uint64_t h, const uint8_t *data, size_t len) {
      return h;
 }
 
+// Returns the hash of a DNS question (case-insensitive name + type + class)
 static uint64_t key_hash(const dns_question *q) {
      uint64_t h = FNV_OFFSET;
      // Hash hostname
@@ -27,20 +28,23 @@ static uint64_t key_hash(const dns_question *q) {
      }
 
      // Hash type + class
-     uint8_t rest[4] = {q->type >> 8, q->type & 0xFF, q->class >> 8, q->class & 0xFF};
+     const uint8_t rest[4] = {q->type >> 8, q->type & 0xFF, q->class >> 8, q->class & 0xFF};
      return fnv1a(h, rest, sizeof rest);
 }
 
+// Returns true if two questions are equal, ignoring case in the name
 static bool questions_eq(const dns_question *a, const dns_question *b) {
      return strcasecmp(a->name, b->name) == 0 && (a->type == b->type) && (a->class == b->class);
 }
 
 // TTL HANDLING
-
-static uint32_t min_u32(uint32_t a, uint32_t b) {
+// Returns the lower of the two values
+static uint32_t min_u32(const uint32_t a, const uint32_t b) {
      return a < b ? a : b;
 }
 
+// Returns the smallest TTL in the packet (the record that will expire first), ignoring OPT records
+// Capped at TTL_MAX, or 0 if there are no records to check
 static uint32_t packet_min_ttl(const dns_packet *p) {
      uint32_t min_ttl = -1;
      // Check answer
@@ -65,7 +69,9 @@ static uint32_t packet_min_ttl(const dns_packet *p) {
      return min_ttl;
 }
 
-static void age_records(dns_record *recs, uint16_t count, uint32_t age) {
+// Reduces the TTL of each record in the list by age seconds, stopping at 0
+// Skips OPT records, as their TTL field isn't a real TTL
+static void age_records(dns_record *recs, const uint16_t count, const uint32_t age) {
      for (uint16_t i = 0; i < count; i++) {
           if (recs[i].type == DNS_TYPE_OPT) continue;
           uint32_t *ttl = &recs[i].ttl;
@@ -73,28 +79,30 @@ static void age_records(dns_record *recs, uint16_t count, uint32_t age) {
      }
 }
 
+// Reduces the TTL of all the entry's records by the time since this was last done
 static void update_ttl(cache_entry *e) {
-     time_t now = now_seconds();
-     uint32_t age = (uint32_t)(now - e->updated_at);
+     const time_t now = now_seconds();
+     const uint32_t age = (uint32_t)(now - e->updated_at);
      age_records(e->packet.answers, e->packet.an_count, age);
      age_records(e->packet.authority, e->packet.ns_count, age);
      age_records(e->packet.additional, e->packet.ar_count, age);
      e->updated_at = now;
 }
 
+// MAIN
+// Returns an empty cache with `bucket_count` buckets, or with 0 buckets if allocation fails
 cache cache_create(const size_t bucket_count) {
      cache new_cache = {0};
      new_cache.buckets = calloc(bucket_count, sizeof *new_cache.buckets);
      new_cache.bucket_count = bucket_count;
 
-     if (!new_cache.buckets) {
-          new_cache.bucket_count = 0;
-     }
-
+     if (!new_cache.buckets) { new_cache.bucket_count = 0; }
      return new_cache;
 }
 
-void resize_cache(cache *c, size_t new_count) {
+// Resizes the cache and moves all existing entries to their new buckets
+// Leaves the cache unchanged if allocation fails
+void resize_cache(cache *c, const size_t new_count) {
      cache_entry **new_buckets = calloc(new_count, sizeof *new_buckets);
      if (!new_buckets) return;
 
@@ -113,6 +121,7 @@ void resize_cache(cache *c, size_t new_count) {
      c->bucket_count = new_count;
 }
 
+// Frees every entry in the cache and its bucket array, leaving it empty
 void cache_free(cache *c) {
      for (size_t i = 0; i < c->bucket_count; i++) {
           cache_entry *e = c->buckets[i];
@@ -129,16 +138,18 @@ void cache_free(cache *c) {
      c->entry_count = 0;
 }
 
+// Takes ownership of p and adds it to the cache, growing the cache if it's too full
+// p is freed instead if it can't be cached
 void cache_insert(cache *c, dns_packet p) {
-     uint64_t hash = key_hash(&p.question);
+     const uint64_t hash = key_hash(&p.question);
 
-     uint32_t ttl = packet_min_ttl(&p);
+     const uint32_t ttl = packet_min_ttl(&p);
      if (ttl == 0) { free_dns_packet(&p); return; } // Not cacheable
 
      cache_entry *e = malloc(sizeof *e);
      if (!e) { free_dns_packet(&p); return; } // Error allocating memory
 
-     time_t now = now_seconds();
+     const time_t now = now_seconds();
      e->hash = hash;
      e->expires_at = now + ttl;
      e->updated_at = now;
@@ -151,13 +162,15 @@ void cache_insert(cache *c, dns_packet p) {
 
      const double load_factor = (double)c->entry_count / (double)c->bucket_count;
      if (load_factor >= MAX_LOAD_FACTOR) {
-          size_t new_size = c->bucket_count * 2;
+          const size_t new_size = c->bucket_count * 2;
           resize_cache(c, new_size);
      }
 }
 
+// Returns the cached packet that answers the question, or NULL if there isn't one
+// Removes any expired entries it finds along the way
 const dns_packet *cache_lookup(cache *c, const dns_question *q) {
-     uint64_t hash = key_hash(q);
+     const uint64_t hash = key_hash(q);
      cache_entry **pp = &c->buckets[hash % c->bucket_count];
      while (*pp) {
           cache_entry *e = *pp;
