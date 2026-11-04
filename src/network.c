@@ -19,6 +19,8 @@
 
 #define BUF_SIZE 4096
 
+static bool verbose = false; // Whether to log every query, which costs throughput
+
 // Returns the name of a DNS type, for logging
 static const char *dns_type_name(const uint16_t type) {
     switch (type) {
@@ -177,7 +179,7 @@ static void handle_client(int sock, int sock_up, cache *c, list *blocklist) {
         // Parse DNS packet
         dns_packet packet = {0};
         if (parse_dns_packet(buf, n, &packet) < 0) {
-            printf("Malformed request packet\n");
+            if (verbose) printf("Malformed request packet\n");
             free_dns_packet(&packet);
             continue;
         }
@@ -198,11 +200,11 @@ static void handle_client(int sock, int sock_up, cache *c, list *blocklist) {
 
         else if (list_blocks(packet.question.name, blocklist)) {
             response_length = make_error(&packet, DNS_RCODE_NXDOMAIN, response_buf, sizeof response_buf);
-            printf("Blocked %s request for %s\n", dns_type_name(packet.question.type), packet.question.name);
+            if (verbose) printf("Blocked %s request for %s\n", dns_type_name(packet.question.type), packet.question.name);
         }
 
         else { // Valid request
-            printf("Received %s request for %s\n", dns_type_name(packet.question.type), packet.question.name);
+            if (verbose) printf("Received %s request for %s\n", dns_type_name(packet.question.type), packet.question.name);
             const dns_packet *cached = cache_lookup(c, &packet.question);
 
             if (cached) { // Cache exists
@@ -273,7 +275,7 @@ static void handle_upstream(const int sock_up, const int sock, cache *c, list *b
         }
 
         if (!q->parent && reply_is_blocked(&reply, blocklist)) {
-            printf("Blocked CNAME while resolving %s\n", q->original.name);
+            if (verbose) printf("Blocked CNAME while resolving %s\n", q->original.name);
             free_dns_packet(&reply);
             fail_query(sock, q, DNS_RCODE_NXDOMAIN);
             continue;
@@ -314,7 +316,9 @@ static void handle_upstream(const int sock_up, const int sock, cache *c, list *b
 
 // Creates both sockets, then polls them forever, handling queries, responses and timeouts
 // Returns 1 if a socket can't be opened
-int network_listen(const int port, list *blocklist) {
+int network_listen(const int port, list *blocklist, const bool log_queries) {
+    verbose = log_queries;
+
     cache cache = cache_create(8);
     if (cache.bucket_count == 0) {
         fprintf(stderr, "Failed to allocate cache\n");

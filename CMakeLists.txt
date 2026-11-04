@@ -14,5 +14,5 @@ add_executable(dns
         src/blocklist.c)
 
 target_include_directories(dns PRIVATE include)
-target_compile_options(dns PRIVATE -Wall -Wextra -g)
+target_compile_options(dns PRIVATE -Wall -Wextra -g -O2)
 target_compile_definitions(dns PRIVATE BLOCKLIST_DIR="${PROJECT_SOURCE_DIR}/blocklists")

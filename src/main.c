@@ -1,4 +1,6 @@
+#include <stdbool.h>
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 
 #include "network.h"
@@ -6,8 +8,17 @@
 
 #define PORT 53
 
-// Seeds rand() and runs the server on PORT. Returns its exit status
-int main(void) {
+// Seeds rand() and runs the server on PORT, logging every query if passed -v. Returns its exit status
+int main(int argc, char **argv) {
+    bool log_queries = false;
+    if (argc == 2 && strcmp(argv[1], "-v") == 0) {
+        log_queries = true;
+    }
+    else if (argc != 1) {
+        fprintf(stderr, "Usage: %s [-v]\n", argv[0]);
+        return 1;
+    }
+
     srand(time(NULL)); // Randomise rand() calls
 
     list *l = list_create(8);
@@ -22,7 +33,7 @@ int main(void) {
         return 1;
     }
 
-    const int status = network_listen(PORT, l);
+    const int status = network_listen(PORT, l, log_queries);
 
     return status;
 }
