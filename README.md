@@ -1,4 +1,4 @@
-# Recursive DNS Resolver
+# RaphDNS, a Recursive DNS Resolver
 
 A recursive DNS resolver with domain blocking, written from scratch in C with no external libraries.
 
