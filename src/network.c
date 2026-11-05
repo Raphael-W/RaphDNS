@@ -40,6 +40,16 @@ static const char *dns_type_name(const uint16_t type) {
     }
 }
 
+// Logs the outcome of a query in aligned columns, if verbose
+// question can be NULL if there isn't a usable one, and detail can be NULL if there's nothing to add
+static void log_query(const char *colour, const char *status, const dns_question *question, const char *detail) {
+    if (!verbose) return;
+    const char *type = question ? dns_type_name(question->type) : "-";
+    const char *name = question ? question->name : "";
+    const char *separator = question && detail ? " " : "";
+    log_message(colour, "%-9s %-7s %s%s%s", status, type, name, separator, detail ? detail : "");
+}
+
 // Writes an error response to the query into out, with the given rcode
 // Returns the response's length in bytes, or -1 on failure
 static int make_error(const dns_packet *query, const uint8_t rcode, uint8_t *out, const size_t out_size) {
@@ -118,6 +128,9 @@ static void fail_query(const int sock, query *q, const int rcode) {
         pending_remove(q);
         q = parent;
     }
+
+    // Blocked CNAMEs also end up here, but they've already been logged
+    if (rcode == DNS_RCODE_SERVFAIL) log_query(LOG_YELLOW, "Failed", &q->original, NULL);
 
     uint8_t buf[BUF_SIZE];
     const dns_packet p = {.id = q->client_id, .rd = 1, .qd_count = 1, .question = q->original};
@@ -218,13 +231,17 @@ static void handle_client(int sock, int sock_up, cache *c, list *blocklist) {
             response[2] = 0x80 | (buf[2] & 0x79); // QR=1, keeping opcode and RD
             response[3] = 0x80 | DNS_RCODE_NOTIMP; //RA=1, plus the rcode
             sendto(sock, response, sizeof response, 0, (struct sockaddr *)&client, client_len);
+
+            char detail[32];
+            snprintf(detail, sizeof detail, "unsupported opcode %d", (buf[2] >> 3) & 0x0F);
+            log_query(LOG_YELLOW, "Rejected", NULL, detail);
             continue;
         }
 
         // Parse DNS packet
         dns_packet packet = {0};
         if (parse_dns_packet(buf, n, &packet) < 0) {
-            if (verbose) printf("Malformed request packet\n");
+            log_query(LOG_YELLOW, "Malformed", NULL, "request packet");
             free_dns_packet(&packet);
             continue;
         }
@@ -241,15 +258,18 @@ static void handle_client(int sock, int sock_up, cache *c, list *blocklist) {
         // There should only ever be one question (despite what the existence of qd_count may suggest)
         if (packet.qd_count != 1) {
             response_length = make_error(&packet, DNS_RCODE_FORMERR, response_buf, sizeof response_buf);
+
+            char detail[32];
+            snprintf(detail, sizeof detail, "%u questions", packet.qd_count);
+            log_query(LOG_YELLOW, "Rejected", NULL, detail);
         }
 
         else if (list_blocks(packet.question.name, blocklist)) {
             response_length = make_error(&packet, DNS_RCODE_NXDOMAIN, response_buf, sizeof response_buf);
-            if (verbose) printf("Blocked %s request for %s\n", dns_type_name(packet.question.type), packet.question.name);
+            log_query(LOG_RED, "Blocked", &packet.question, NULL);
         }
 
         else { // Valid request
-            if (verbose) printf("Received %s request for %s\n", dns_type_name(packet.question.type), packet.question.name);
             const dns_packet *cached = cache_lookup(c, &packet.question);
 
             if (cached) { // Cache exists
@@ -259,9 +279,11 @@ static void handle_client(int sock, int sock_up, cache *c, list *blocklist) {
                 reply.rd = packet.rd;
                 reply.aa = 0;
                 response_length = write_reply(response_buf, client_limit(&packet), reply);
+                if (response_length > 0) log_query(LOG_GREEN, "Answered", &packet.question, "(from cache)");
             }
             else if (packet.rd == 0) {
                 response_length = make_error(&packet, DNS_RCODE_REFUSED, response_buf, sizeof response_buf);
+                log_query(LOG_YELLOW, "Refused", &packet.question, "(not cached, RD not set)");
             }
             else { // Not cached: start resolving
                 query new_query = {.client=client, .client_id=packet.id, .client_len=client_len, .client_limit=client_limit(&packet), .question=packet.question};
@@ -286,6 +308,7 @@ static void handle_client(int sock, int sock_up, cache *c, list *blocklist) {
         }
 
         if (response_length < 0) {
+            log_query(LOG_YELLOW, "Failed", &packet.question, "(internal error)");
             response_length = make_error(&packet, DNS_RCODE_SERVFAIL, response_buf, sizeof response_buf);
         }
         if (response_length > 0) {
@@ -325,7 +348,7 @@ static void handle_upstream(const int sock_up, const int sock, cache *c, list *b
         }
 
         if (!q->parent && reply_is_blocked(&reply, blocklist)) {
-            if (verbose) printf("Blocked CNAME while resolving %s\n", q->original.name);
+            log_query(LOG_RED, "Blocked", &q->original, "(CNAME)");
             free_dns_packet(&reply);
             fail_query(sock, q, DNS_RCODE_NXDOMAIN);
             continue;
@@ -351,7 +374,22 @@ static void handle_upstream(const int sock_up, const int sock, cache *c, list *b
             if (reply_len > 0) sendto(sock, buf, reply_len, 0, (struct sockaddr *)&q->client, q->client_len);
             pending_remove(q);
 
-            if (reply.rcode == DNS_RCODE_NOERROR || reply.rcode == DNS_RCODE_NXDOMAIN) {
+            const bool cacheable = reply.rcode == DNS_RCODE_NOERROR || reply.rcode == DNS_RCODE_NXDOMAIN;
+
+            // Logged first, as cache_insert takes ownership of reply
+            if (reply_len <= 0) {
+                log_query(LOG_YELLOW, "Failed", &reply.question, "(couldn't build reply)");
+            }
+            else if (cacheable) {
+                log_query(LOG_GREEN, "Resolved", &reply.question, NULL);
+            }
+            else {
+                char detail[16];
+                snprintf(detail, sizeof detail, "(rcode %d)", reply.rcode);
+                log_query(LOG_YELLOW, "Failed", &reply.question, detail);
+            }
+
+            if (cacheable) {
                 cache_insert(c, reply);
             }
             else {
