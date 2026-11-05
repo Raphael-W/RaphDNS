@@ -178,6 +178,18 @@ static void handle_client(int sock, int sock_up, cache *c, list *blocklist) {
             break;
         }
 
+        // Only standard queries are supported.
+        // Checked before parsing as other opcodes don't necessarily have a normal question
+        if (n >= 12 && !(buf[2] & 0x80) && ((buf[2] >> 3) & 0x0F) != DNS_OPCODE_QUERY) {
+            uint8_t response[12] = {0};
+            response[0] = buf[0]; // ID
+            response[1] = buf[1];
+            response[2] = 0x80 | (buf[2] & 0x79); // QR=1, keeping opcode and RD
+            response[3] = 0x80 | DNS_RCODE_NOTIMP; //RA=1, plus the rcode
+            sendto(sock, response, sizeof response, 0, (struct sockaddr *)&client, client_len);
+            continue;
+        }
+
         // Parse DNS packet
         dns_packet packet = {0};
         if (parse_dns_packet(buf, n, &packet) < 0) {
