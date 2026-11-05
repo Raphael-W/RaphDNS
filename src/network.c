@@ -213,8 +213,12 @@ static void handle_client(int sock, int sock_up, cache *c, list *blocklist) {
                 dns_packet reply = *cached;
                 reply.id = packet.id;
                 reply.question = packet.question;
+                reply.rd = packet.rd;
                 reply.aa = 0;
                 response_length = create_dns_packet(response_buf, sizeof response_buf, &reply);
+            }
+            else if (packet.rd == 0) {
+                response_length = make_error(&packet, DNS_RCODE_REFUSED, response_buf, sizeof response_buf);
             }
             else { // Not cached: start resolving
                 query new_query = {.client=client, .client_id=packet.id, .client_len=client_len, .question=packet.question};
