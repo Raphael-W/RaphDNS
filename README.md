@@ -63,15 +63,16 @@ Measured on an Apple M4 Pro with the client and server on the same machine, over
 
 These are best-case figures: nearly all queries are cache hits for 20 domains, with no network between client and server.
 
-## Roadmap
+## Roadmap (in order of priority)
 
-- [ ] Cache individual records rather than whole packets  
+- [ ] Fix identified bugs
 - [ ] Use name compression in responses
+- [ ] Write a test suite
 - [ ] Implement TCP fallback
-- [ ] Implement DNSSEC validation
 - [ ] Handle truncated DNS packets
 - [ ] Implement IPv6 support
-- [ ] Write a test suite
+- [ ] Cache individual records rather than whole packets
+- [ ] Implement DNSSEC validation
 
 ## Credits
 
