@@ -1,8 +1,14 @@
 # RaphDNS: a Recursive DNS Resolver
 
-A recursive DNS resolver with domain blocking, written from scratch in C with no external libraries.
+![Query log from running with -v, showing resolved, cached, blocked and rejected queries](docs/screenshot.png)
 
-Rather than forwarding queries to a provider like 1.1.1.1, it starts at the root servers and follows referrals down to the authoritative nameserver. Repeat answers are served from a TTL-aware cache, and ad, tracking and malware domains are blocked using a list of around 250,000 entries.
+## Features
+- Written from scratch in C, with no external libraries
+- Resolves from the root servers, with no upstream provider like 1.1.1.1
+- Blocks ads, trackers and malware using a list of around 250,000 domains
+- Caches answers until their TTL expires
+- Handles many lookups at once on a single thread
+- Logs every query with `-v`, colour-coded by outcome
 
 ## How it works
 
