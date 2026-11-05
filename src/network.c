@@ -47,6 +47,7 @@ static int make_error(const dns_packet *query, const uint8_t rcode, uint8_t *out
     fail.qr = 1;
     fail.ra = 1;
     fail.aa = 0;
+    fail.qd_count = 1;
     fail.rcode = rcode;
     fail.an_count = fail.ns_count = fail.ar_count = 0;
     return create_dns_packet(out, out_size, &fail);
