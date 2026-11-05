@@ -5,6 +5,7 @@
 #include <string.h>
 
 #define MAX_LOAD_FACTOR 0.75
+#define MAX_ENTRY_COUNT 10000
 #define TTL_MAX 86400
 
 // HASHING
@@ -79,6 +80,65 @@ static void update_ttl(cache_entry *e) {
      e->updated_at = now;
 }
 
+// Iterate over all entries and remove any that have expired
+// Returns how many records were removed
+static int sweep_expired(cache *c) {
+     int removed_count = 0;
+     time_t now = now_seconds();
+     for (size_t i = 0; i < c->bucket_count; i++) {
+          cache_entry **pp = &c->buckets[i];
+          while (*pp) {
+               cache_entry *e = *pp;
+               if (e->expires_at < now) {
+                    *pp = e->next;
+                    free_dns_packet(&e->packet);
+                    free(e);
+                    c->entry_count--;
+                    removed_count++;
+                    continue;
+               }
+               pp = &e->next;
+          }
+     }
+     return removed_count;
+}
+
+// Remove the `count` of entries that next about to expire
+static void remove_next_expired(cache *c, int count) {
+     cache_entry *soon_to_expire[count];
+     int arr_count = 0;
+     for (size_t i = 0; i < c->bucket_count; i++) {
+          cache_entry *e = c->buckets[i];
+          while (e) {
+               cache_entry *next = e->next;
+               if (arr_count < count || e->expires_at < (soon_to_expire[arr_count - 1]->expires_at)) {
+                    int j = (arr_count < count) ? arr_count++ : count - 1;
+                    while (j > 0 && soon_to_expire[j - 1]->expires_at > e->expires_at) {
+                         soon_to_expire[j] = soon_to_expire[j - 1];
+                         j--;
+                    }
+                    soon_to_expire[j] = e;
+               }
+               e = next;
+          }
+     }
+
+     for (int i = 0; i < arr_count; i++) {
+          cache_entry **pp = &c->buckets[soon_to_expire[i]->hash % c->bucket_count];
+          while (*pp) {
+               cache_entry *e = *pp;
+               if (e == soon_to_expire[i]) {
+                    *pp = e->next;
+                    free_dns_packet(&e->packet);
+                    free(e);
+                    c->entry_count--;
+                    break;
+               }
+               pp = &e->next;
+          }
+     }
+}
+
 // MAIN
 // Returns an empty cache with `bucket_count` buckets, or with 0 buckets if allocation fails
 cache cache_create(const size_t bucket_count) {
@@ -136,6 +196,11 @@ void cache_insert(cache *c, dns_packet p) {
      const uint32_t ttl = packet_min_ttl(&p);
      if (ttl == 0) { free_dns_packet(&p); return; } // Not cacheable
 
+     // If MAX ENTRY COUNT hit, first try sweeping expired records, then delete soon-to-expire records
+     if (c->entry_count >= MAX_ENTRY_COUNT) {
+          if (sweep_expired(c) < 100) { remove_next_expired(c, 100); }
+     }
+
      cache_entry *e = malloc(sizeof *e);
      if (!e) { free_dns_packet(&p); return; } // Error allocating memory
 
@@ -150,7 +215,11 @@ void cache_insert(cache *c, dns_packet p) {
      *head = e;
      c->entry_count++;
 
-     const double load_factor = (double)c->entry_count / (double)c->bucket_count;
+     // Check whether an expired entry sweep is enough to lower the load factor first
+     double load_factor = (double)c->entry_count / (double)c->bucket_count;
+     if (load_factor >= MAX_LOAD_FACTOR) { sweep_expired(c); }
+
+     load_factor = (double)c->entry_count / (double)c->bucket_count;
      if (load_factor >= MAX_LOAD_FACTOR) {
           const size_t new_size = c->bucket_count * 2;
           resize_cache(c, new_size);
