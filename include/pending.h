@@ -30,6 +30,7 @@ typedef struct query {
     dns_question question;     // Name currently being looked up
     dns_question original;     // Name the client asked for
     time_t expires_at;
+    uint64_t start_time;       // When the client's query arrived (monotonic ns), for timing
 
     char servers[MAX_SERVERS][INET_ADDRSTRLEN];
     int server_count;

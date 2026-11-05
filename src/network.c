@@ -14,6 +14,7 @@
 #include <poll.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <sys/ioctl.h>
 
 #include "resolver.h"
 
@@ -45,14 +46,56 @@ static const char *dns_type_name(const uint16_t type) {
     }
 }
 
-// Logs the outcome of a query in aligned columns, if verbose
+// Formats a duration in nanoseconds into out, e.g. "28 us" or "142 ms"
+// ASCII units only, as printf width counts bytes and a multi-byte char would misalign the column
+static void format_duration(const uint64_t ns, char *out, const size_t len) {
+    if (ns < 1000)             snprintf(out, len, "%llu ns", (unsigned long long)ns);
+    else if (ns < 1000000)     snprintf(out, len, "%llu us", (unsigned long long)(ns / 1000));
+    else if (ns < 1000000000)  snprintf(out, len, "%llu ms", (unsigned long long)(ns / 1000000));
+    else                       snprintf(out, len, "%llu s",  (unsigned long long)(ns / 1000000000));
+}
+
+// Returns the terminal width in columns, or 0 if stdout isn't a terminal (e.g. redirected to a file)
+static int terminal_width(void) {
+    struct winsize ws;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) return ws.ws_col;
+    return 0;
+}
+
+// Logs the outcome of a query, if verbose, with how long it took pinned to the right edge of the terminal
 // question can be NULL if there isn't a usable one, and detail can be NULL if there's nothing to add
-static void log_query(const char *colour, const char *status, const dns_question *question, const char *detail) {
+static void log_query(const char *colour, const char *status, const dns_question *question, const char *detail, const uint64_t elapsed) {
     if (!verbose) return;
     const char *type = question ? dns_type_name(question->type) : "-";
     const char *name = question ? question->name : "";
     const char *separator = question && detail ? " " : "";
-    log_message(colour, "%-9s %-7s %s%s%s", status, type, name, separator, detail ? detail : "");
+
+    char prefix[32];
+    const int prefix_len = log_timestamp(prefix, sizeof prefix);
+
+    // The status, type, name and detail, as one left-justified block
+    char left[320];
+    const int left_len = snprintf(left, sizeof left, "%-9s %-7s %s%s%s",
+                                  status, type, name, separator, detail ? detail : "");
+
+    char dur[16];
+    format_duration(elapsed, dur, sizeof dur);
+    const int dur_len = (int)strlen(dur);
+
+    // Pad so the duration ends one column shy of the right edge; fall back to a fixed column off a terminal.
+    // A name wider than the screen clamps to a single space and wraps, which no layout can avoid
+    char body[512];
+    const int width = terminal_width();
+    if (width > 0) {
+        int pad = width - prefix_len - left_len - dur_len - 1;
+        if (pad < 1) pad = 1;
+        snprintf(body, sizeof body, "%s%*s%s", left, pad, "", dur);
+    }
+    else {
+        snprintf(body, sizeof body, "%-60s %s", left, dur);
+    }
+
+    log_message(prefix, colour, "%s", body);
 }
 
 // Writes an error response to the query into out, with the given rcode
@@ -135,7 +178,7 @@ static void fail_query(const int sock, query *q, const int rcode) {
     }
 
     // Blocked CNAMEs also end up here, but they've already been logged
-    if (rcode == DNS_RCODE_SERVFAIL) log_query(LOG_YELLOW, "Failed", &q->original, NULL);
+    if (rcode == DNS_RCODE_SERVFAIL) log_query(LOG_YELLOW, "Failed", &q->original, NULL, now_nanos() - q->start_time);
 
     uint8_t buf[BUF_SIZE];
     const dns_packet p = {.id = q->client_id, .rd = 1, .qd_count = 1, .question = q->original};
@@ -225,6 +268,7 @@ static void handle_client(int sock, int sock_up, cache *c, list *blocklist) {
 
         // Receive packet and store in buf
         ssize_t n = recvfrom(sock, buf, sizeof buf, 0, (struct sockaddr *)&client, &client_len);
+        uint64_t start_time = now_nanos();
         if (n < 0) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) perror("recvfrom");
             break;
@@ -242,14 +286,14 @@ static void handle_client(int sock, int sock_up, cache *c, list *blocklist) {
 
             char detail[32];
             snprintf(detail, sizeof detail, "unsupported opcode %d", (buf[2] >> 3) & 0x0F);
-            log_query(LOG_YELLOW, "Rejected", NULL, detail);
+            log_query(LOG_YELLOW, "Rejected", NULL, detail, now_nanos() - start_time);
             continue;
         }
 
         // Parse DNS packet
         dns_packet packet = {0};
         if (parse_dns_packet(buf, n, &packet) < 0) {
-            log_query(LOG_YELLOW, "Malformed", NULL, "request packet");
+            log_query(LOG_YELLOW, "Malformed", NULL, "request packet", now_nanos() - start_time);
             free_dns_packet(&packet);
             continue;
         }
@@ -269,12 +313,12 @@ static void handle_client(int sock, int sock_up, cache *c, list *blocklist) {
 
             char detail[32];
             snprintf(detail, sizeof detail, "%u questions", packet.qd_count);
-            log_query(LOG_YELLOW, "Rejected", NULL, detail);
+            log_query(LOG_YELLOW, "Rejected", NULL, detail, now_nanos() - start_time);
         }
 
         else if (list_blocks(packet.question.name, blocklist)) {
             response_length = make_error(&packet, DNS_RCODE_NXDOMAIN, response_buf, sizeof response_buf);
-            log_query(LOG_RED, "Blocked", &packet.question, NULL);
+            log_query(LOG_RED, "Blocked", &packet.question, NULL, now_nanos() - start_time);
         }
 
         else { // Valid request
@@ -287,14 +331,14 @@ static void handle_client(int sock, int sock_up, cache *c, list *blocklist) {
                 reply.rd = packet.rd;
                 reply.aa = 0;
                 response_length = write_reply(response_buf, client_limit(&packet), reply);
-                if (response_length > 0) log_query(LOG_GREEN, "Answered", &packet.question, "(from cache)");
+                if (response_length > 0) log_query(LOG_GREEN, "Answered", &packet.question, "(from cache)", now_nanos() - start_time);
             }
             else if (packet.rd == 0) {
                 response_length = make_error(&packet, DNS_RCODE_REFUSED, response_buf, sizeof response_buf);
-                log_query(LOG_YELLOW, "Refused", &packet.question, "(not cached, RD not set)");
+                log_query(LOG_YELLOW, "Refused", &packet.question, "(not cached, RD not set)", now_nanos() - start_time);
             }
             else { // Not cached: start resolving
-                query new_query = {.client=client, .client_id=packet.id, .client_len=client_len, .client_limit=client_limit(&packet), .question=packet.question};
+                query new_query = {.client=client, .client_id=packet.id, .client_len=client_len, .client_limit=client_limit(&packet), .question=packet.question, .start_time=start_time};
                 int query_id = pending_add(&new_query);
 
                 if (query_id < 0) {
@@ -316,7 +360,7 @@ static void handle_client(int sock, int sock_up, cache *c, list *blocklist) {
         }
 
         if (response_length < 0) {
-            log_query(LOG_YELLOW, "Failed", &packet.question, "(internal error)");
+            log_query(LOG_YELLOW, "Failed", &packet.question, "(internal error)", now_nanos() - start_time);
             response_length = make_error(&packet, DNS_RCODE_SERVFAIL, response_buf, sizeof response_buf);
         }
         if (response_length > 0) {
@@ -356,7 +400,7 @@ static void handle_upstream(const int sock_up, const int sock, cache *c, list *b
         }
 
         if (!q->parent && reply_is_blocked(&reply, blocklist)) {
-            log_query(LOG_RED, "Blocked", &q->original, "(CNAME)");
+            log_query(LOG_RED, "Blocked", &q->original, "(CNAME)", now_nanos() - q->start_time);
             free_dns_packet(&reply);
             fail_query(sock, q, DNS_RCODE_NXDOMAIN);
             continue;
@@ -380,21 +424,22 @@ static void handle_upstream(const int sock_up, const int sock, cache *c, list *b
             reply.aa = 0;
             const int reply_len = write_reply(buf, q->client_limit, reply);
             if (reply_len > 0) sendto(sock, buf, reply_len, 0, (struct sockaddr *)&q->client, q->client_len);
+            const uint64_t elapsed = now_nanos() - q->start_time; // Captured before pending_remove frees the slot
             pending_remove(q);
 
             const bool cacheable = reply.rcode == DNS_RCODE_NOERROR || reply.rcode == DNS_RCODE_NXDOMAIN;
 
             // Logged first, as cache_insert takes ownership of reply
             if (reply_len <= 0) {
-                log_query(LOG_YELLOW, "Failed", &reply.question, "(couldn't build reply)");
+                log_query(LOG_YELLOW, "Failed", &reply.question, "(couldn't build reply)", elapsed);
             }
             else if (cacheable) {
-                log_query(LOG_GREEN, "Resolved", &reply.question, NULL);
+                log_query(LOG_GREEN, "Resolved", &reply.question, NULL, elapsed);
             }
             else {
                 char detail[16];
                 snprintf(detail, sizeof detail, "(rcode %d)", reply.rcode);
-                log_query(LOG_YELLOW, "Failed", &reply.question, detail);
+                log_query(LOG_YELLOW, "Failed", &reply.question, detail, elapsed);
             }
 
             if (cacheable) {
