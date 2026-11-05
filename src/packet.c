@@ -176,6 +176,11 @@ static void read_record(bit_reader *r, dns_record *rec) {
 
 // Returns a newly allocated list of `count` records read from r, or NULL if allocation fails
 static dns_record *read_records(bit_reader *r, const uint16_t count) {
+    const size_t remaining = r->size - r->bit / 8;
+    if (count > (remaining / 11)) {
+        r->ok = false;
+        return NULL;
+    }
     dns_record *records = calloc(count, sizeof *records);
     if (!records && count != 0) {
         r->ok = false;
