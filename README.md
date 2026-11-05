@@ -25,7 +25,7 @@ Requires CMake 4.3+ and a C17 compiler. Developed and tested on macOS.
 ```sh
 cmake -S . -B build
 cmake --build build
-sudo ./build/dns    # Port 53 requires root. Add -v to log every query
+sudo ./build/dns    # Port 53 requires root
 ```
 
 Then, from another terminal:
@@ -34,17 +34,26 @@ Then, from another terminal:
 dig @127.0.0.1 example.com
 ```
 
+### Options
+
+| Option         | Description                                               | Default     |
+|----------------|-----------------------------------------------------------|-------------|
+| `-v`           | Log every query                                           | Off         |
+| `-p [port]`    | Port to listen on                                         | `53`        |
+| `-b [address]` | IPv4 address to bind to. Use `0.0.0.0` for all interfaces | `127.0.0.1` |
+| `-h`           | Show usage and exit                                       |             |
+
 Any file placed in `blocklists/` is loaded at startup, with one domain per line and `#` for comments.
 
 ## Performance
 
 Measured on an Apple M4 Pro with the client and server on the same machine, over loopback, with query logging off:
 
-| Measurement | Result |
-|---|---|
-| Cached lookup (p50, one client) | ~25 µs |
-| Cached throughput (10 clients, 30 s runs) | ~100,000 queries/sec on one thread |
-| Uncached lookup | ~85–260 ms, depending on the domain |
+| Measurement                               | Result                              |
+|-------------------------------------------|-------------------------------------|
+| Cached lookup (p50, one client)           | ~25 µs                              |
+| Cached throughput (10 clients, 30 s runs) | ~100,000 queries/sec on one thread  |
+| Uncached lookup                           | ~85–260 ms, depending on the domain |
 
 These are best-case figures: nearly all queries are cache hits for 20 domains, with no network between client and server.
 
@@ -56,7 +65,6 @@ These are best-case figures: nearly all queries are cache hits for 20 domains, w
 - [ ] Implement DNSSEC validation
 - [ ] Handle truncated DNS packets
 - [ ] Implement IPv6 support
-- [ ] Listen on external interfaces, not just localhost
 - [ ] Write a test suite
 
 ## Credits

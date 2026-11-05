@@ -78,7 +78,7 @@ static bool make_addr(const char *ip, int port, struct sockaddr_in *out) {
 }
 
 // Returns the socket that clients send queries to, bound to 127.0.0.1:port, or -1 on failure
-static int open_listener(const int port) {
+static int open_listener(const int port, const char* ip) {
     const int sock = udp_socket();
     if (sock < 0) return -1;
 
@@ -87,7 +87,7 @@ static int open_listener(const int port) {
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);
 
     struct sockaddr_in addr;
-    make_addr("127.0.0.1", port, &addr); // 127.0.0.1 only, for now
+    make_addr(ip, port, &addr);
     if (bind(sock, (struct sockaddr *)&addr, sizeof addr) < 0) {
         perror("bind");
         close(sock);
@@ -316,7 +316,7 @@ static void handle_upstream(const int sock_up, const int sock, cache *c, list *b
 
 // Creates both sockets, then polls them forever, handling queries, responses and timeouts
 // Returns 1 if a socket can't be opened
-int network_listen(const int port, list *blocklist, const bool log_queries) {
+int network_listen(const int port, const char* ip, list *blocklist, const bool log_queries) {
     verbose = log_queries;
 
     cache cache = cache_create(8);
@@ -325,7 +325,7 @@ int network_listen(const int port, list *blocklist, const bool log_queries) {
         return 1;
     }
 
-    const int sock = open_listener(port);
+    const int sock = open_listener(port, ip);
     if (sock < 0) return 1;
 
     const int up_sock = open_upstream();
@@ -336,7 +336,7 @@ int network_listen(const int port, list *blocklist, const bool log_queries) {
         {.fd = up_sock, .events = POLLIN}
     };
 
-    printf("Listening on 127.0.0.1:%d\n", port);
+    printf("Listening on %s:%d\n", ip, port);
 
     for (;;) {
         int timeout_ms = -1;

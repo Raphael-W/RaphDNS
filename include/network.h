@@ -8,6 +8,6 @@
 
 #define QUERY_TIMEOUT_SECONDS 2
 
-int network_listen(int port, list *blocklist, bool log_queries);
+int network_listen(int port, const char* ip, list *blocklist, bool log_queries);
 
 #endif //DNS_NETWORK_H
