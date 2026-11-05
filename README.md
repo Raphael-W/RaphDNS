@@ -65,7 +65,6 @@ These are best-case figures: nearly all queries are cache hits for 20 domains, w
 
 ## Roadmap (in order of priority)
 
-- [ ] Fix identified bugs
 - [ ] Use name compression in responses
 - [ ] Write a test suite
 - [ ] Implement TCP fallback

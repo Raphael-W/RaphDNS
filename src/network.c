@@ -162,6 +162,7 @@ static bool from_server(const struct sockaddr_in *from, const char *ip) {
             from->sin_port == expected.sin_port;
 }
 
+// Returns whether any CNAME in the reply's answers points to a blocked domain
 static bool reply_is_blocked(const dns_packet *p, list *l) {
     for (int i = 0; i < p->an_count; i++) {
         const dns_record *rec = &p->answers[i];
@@ -198,6 +199,8 @@ static size_t client_limit(const dns_packet *p) {
     return 512;
 }
 
+// Writes reply into out, up to limit bytes. If it doesn't fit, writes an empty reply with the TC flag set instead
+// Returns the length in bytes, or -1 on failure
 static int write_reply(uint8_t *out, const size_t limit, dns_packet reply) {
     const int len = create_dns_packet(out, limit, &reply);
     if (len >= 0) return len;

@@ -8,7 +8,7 @@
 
 #define PENDING_SIZE 1024
 #define MAX_SERVERS 13
-#define MAX_NS_NAMES 4
+#define MAX_NS_NAMES 13
 #define MAX_CNAMES 8
 
 // A CNAME followed during a lookup, added to the final answer

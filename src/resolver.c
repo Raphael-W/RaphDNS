@@ -28,6 +28,19 @@ static char* ROOT_HINTS[] = {
     "202.12.27.33"          // M.ROOT-SERVERS.NET
 };
 
+// Shuffles count rows of row_size bytes in place, so each order is equally likely (Fisher-Yates)
+static void shuffle_rows(void *rows, const int count, const size_t row_size) {
+    char tmp[row_size];
+
+    char *base = rows;
+    for (int i = count - 1; i > 0; i--) {
+        const int j = (int)arc4random_uniform(i + 1);
+        memcpy(tmp, base + i * row_size, row_size);
+        memcpy(base + i * row_size, base + j * row_size, row_size);
+        memcpy(base + j * row_size, tmp, row_size);
+    }
+}
+
 // Copies the root servers from a random starting point, so lookups don't always try the same one first
 static int copy_roots(char ips[][INET_ADDRSTRLEN], const int max) {
     const int total = sizeof ROOT_HINTS / sizeof ROOT_HINTS[0];
@@ -56,6 +69,7 @@ static int find_glue(const dns_packet *p, char ips[][INET_ADDRSTRLEN], const int
             }
         }
     }
+    shuffle_rows(ips, count, INET_ADDRSTRLEN);
     return count;
 }
 
@@ -68,6 +82,7 @@ static int find_answer(const dns_packet *p, char ips[][INET_ADDRSTRLEN], const i
             inet_ntop(AF_INET, rec->rdata, ips[count++], INET_ADDRSTRLEN);
         }
     }
+    shuffle_rows(ips, count, INET_ADDRSTRLEN);
     return count;
 }
 
@@ -167,6 +182,7 @@ static void collect_ns_names(query *q, const dns_packet *reply) {
             q->ns_count++;
         }
     }
+    shuffle_rows(q->ns_names, q->ns_count, sizeof q->ns_names[0]);
 }
 
 // Returns the CNAME to follow if the answer has no records of the requested type, or NULL if it's complete

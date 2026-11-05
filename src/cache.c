@@ -34,6 +34,8 @@ static uint32_t min_u32(const uint32_t a, const uint32_t b) {
      return a < b ? a : b;
 }
 
+// Reads the MINIMUM field (the last 4 bytes) from an SOA record's rdata into out
+// Returns false if the rdata is too short to be a valid SOA
 static bool soa_minimum(const dns_record *rec, uint32_t *out) {
      if (rec->rdlength < 22) return false; // Two names (1 byte each) + 5 * 32-bit fields
      const uint8_t *m = rec->rdata + rec->rdlength - 4;
@@ -41,6 +43,7 @@ static bool soa_minimum(const dns_record *rec, uint32_t *out) {
      return true;
 }
 
+// Caps each SOA record's TTL in the authority section at its MINIMUM field, as RFC 2308 requires for negative caching
 static void clamp_soa_ttls(dns_packet *p) {
      for (int i = 0; i < p->ns_count; i++) {
           dns_record *rec = &p->authority[i];
