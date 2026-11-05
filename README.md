@@ -72,6 +72,10 @@ These are best-case figures: nearly all queries are cache hits for 20 domains, w
 - [ ] Implement IPv6 support
 - [ ] Cache individual records rather than whole packets
 - [ ] Implement DNSSEC validation
+<br><br>
+- While it is possible to `dig github.com` and get an answer quickly, when trying to visit `github.com` in the browser, it hangs (which is resolved when switching to a different DNS server)
+- I suspect that implementing name compression in responses will fix this, with TCP fallback being the nail in the coffin for this bug
+- Tested affected websites: `github.com`, `githubstatus.com`, `geeksforgeeks.org`
 
 ## Credits
 
