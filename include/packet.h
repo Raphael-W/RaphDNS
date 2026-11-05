@@ -15,6 +15,7 @@ typedef enum {
     DNS_TYPE_AAAA  = 28,
     DNS_TYPE_SRV   = 33,
     DNS_TYPE_OPT   = 41,
+    DNS_TYPE_SVCB  = 64,
     DNS_TYPE_HTTPS = 65,
     DNS_TYPE_ANY   = 255,
 } dns_type;

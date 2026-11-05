@@ -34,9 +34,14 @@ static const char *dns_type_name(const uint16_t type) {
     case DNS_TYPE_AAAA:  return "AAAA";
     case DNS_TYPE_SRV:   return "SRV";
     case DNS_TYPE_OPT:   return "OPT";
+    case DNS_TYPE_SVCB:  return "SVCB";
     case DNS_TYPE_HTTPS: return "HTTPS";
     case DNS_TYPE_ANY:   return "ANY";
-    default:             return "UNKNOWN";
+    default: {
+        static char buf[12];
+        snprintf(buf, sizeof buf, "TYPE%u", type);
+        return buf;
+    }
     }
 }
 
