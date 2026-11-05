@@ -55,13 +55,13 @@ int main(int argc, char *argv[]) {
 
     list *l = list_create(8);
     if (!l) {
-        printf("Failed to create empty blocklist");
+        printf("Failed to create empty blocklist\n");
         return 1;
     }
 
     int load_status = load_blocklists(BLOCKLIST_DIR, l);
     if (load_status < 0) {
-        printf("Failed to load blocklist");
+        printf("Failed to load blocklist\n");
         return 1;
     }
 

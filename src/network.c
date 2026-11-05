@@ -46,6 +46,7 @@ static int make_error(const dns_packet *query, const uint8_t rcode, uint8_t *out
     dns_packet fail = *query;
     fail.qr = 1;
     fail.ra = 1;
+    fail.aa = 0;
     fail.rcode = rcode;
     fail.an_count = fail.ns_count = fail.ar_count = 0;
     return create_dns_packet(out, out_size, &fail);
@@ -211,6 +212,7 @@ static void handle_client(int sock, int sock_up, cache *c, list *blocklist) {
                 dns_packet reply = *cached;
                 reply.id = packet.id;
                 reply.question = packet.question;
+                reply.aa = 0;
                 response_length = create_dns_packet(response_buf, sizeof response_buf, &reply);
             }
             else { // Not cached: start resolving
@@ -295,6 +297,7 @@ static void handle_upstream(const int sock_up, const int sock, cache *c, list *b
             reply.id = q->client_id;
             reply.rd = 1;
             reply.ra = 1;
+            reply.aa = 0;
             const int reply_len = create_dns_packet(buf, sizeof buf, &reply);
             if (reply_len > 0) sendto(sock, buf, reply_len, 0, (struct sockaddr *)&q->client, q->client_len);
             pending_remove(q);
