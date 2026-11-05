@@ -34,6 +34,23 @@ static uint32_t min_u32(const uint32_t a, const uint32_t b) {
      return a < b ? a : b;
 }
 
+static bool soa_minimum(const dns_record *rec, uint32_t *out) {
+     if (rec->rdlength < 22) return false; // Two names (1 byte each) + 5 * 32-bit fields
+     const uint8_t *m = rec->rdata + rec->rdlength - 4;
+     *out = (uint32_t)m[0] << 24 | (uint32_t)m[1] << 16 | (uint32_t)m[2] << 8 | m[3];
+     return true;
+}
+
+static void clamp_soa_ttls(dns_packet *p) {
+     for (int i = 0; i < p->ns_count; i++) {
+          dns_record *rec = &p->authority[i];
+          uint32_t minimum;
+          if (rec->type == DNS_TYPE_SOA && soa_minimum(rec, &minimum)) {
+               rec->ttl = min_u32(rec->ttl, minimum);
+          }
+     }
+}
+
 // Returns the smallest TTL in the packet (the record that will expire first), ignoring OPT records
 // Capped at TTL_MAX, or 0 if there are no records to check
 static uint32_t packet_min_ttl(const dns_packet *p) {
@@ -191,9 +208,10 @@ void cache_free(cache *c) {
 // Takes ownership of p and adds it to the cache, growing the cache if it's too full
 // p is freed instead if it can't be cached
 void cache_insert(cache *c, dns_packet p) {
+     clamp_soa_ttls(&p);
      const uint64_t hash = key_hash(&p.question);
-
      const uint32_t ttl = packet_min_ttl(&p);
+
      if (ttl == 0) { free_dns_packet(&p); return; } // Not cacheable
 
      // If MAX ENTRY COUNT hit, first try sweeping expired records, then delete soon-to-expire records
