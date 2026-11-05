@@ -26,6 +26,7 @@ typedef struct query {
     uint16_t client_id;        // ID the client used, restored before replying
     struct sockaddr_in client; // Where to send the reply
     socklen_t client_len;
+    size_t client_limit;       // Largest UDP response the client accepts
     dns_question question;     // Name currently being looked up
     dns_question original;     // Name the client asked for
     time_t expires_at;

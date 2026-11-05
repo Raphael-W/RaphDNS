@@ -162,6 +162,37 @@ static bool reply_is_blocked(const dns_packet *p, list *l) {
     return false;
 }
 
+// Strips the OPT record from p
+static void strip_opt(dns_packet *p) {
+    int kept = 0;
+    for (int i = 0; i < p->ar_count; i++) {
+        if (p->additional[i].type == DNS_TYPE_OPT) free(p->additional[i].rdata);
+        else p->additional[kept++] = p->additional[i];
+    }
+    p->ar_count = kept;
+}
+
+// The largest UDP response the client accepts: 512 unless its OPT record says otherwise
+static size_t client_limit(const dns_packet *p) {
+    for (int i = 0; i < p->ar_count; i++) {
+        if (p->additional[i].type != DNS_TYPE_OPT) continue;
+        const size_t size = p->additional[i].class;
+
+        if (size < 512) return 512;
+        if (size > BUF_SIZE) return BUF_SIZE;
+        return size;
+    }
+    return 512;
+}
+
+static int write_reply(uint8_t *out, const size_t limit, dns_packet reply) {
+    const int len = create_dns_packet(out, limit, &reply);
+    if (len >= 0) return len;
+    reply.tc = 1;
+    reply.an_count = reply.ns_count = reply.ar_count = 0;
+    return create_dns_packet(out, limit, &reply);
+}
+
 // Reads all waiting client packets: answers each query from the cache, or starts resolving it if it isn't cached
 static void handle_client(int sock, int sock_up, cache *c, list *blocklist) {
     // Fetches all packets until EAGAIN (no more to fetch)
@@ -227,13 +258,13 @@ static void handle_client(int sock, int sock_up, cache *c, list *blocklist) {
                 reply.question = packet.question;
                 reply.rd = packet.rd;
                 reply.aa = 0;
-                response_length = create_dns_packet(response_buf, sizeof response_buf, &reply);
+                response_length = write_reply(response_buf, client_limit(&packet), reply);
             }
             else if (packet.rd == 0) {
                 response_length = make_error(&packet, DNS_RCODE_REFUSED, response_buf, sizeof response_buf);
             }
             else { // Not cached: start resolving
-                query new_query = {.client=client, .client_id=packet.id, .client_len=client_len, .question=packet.question};
+                query new_query = {.client=client, .client_id=packet.id, .client_len=client_len, .client_limit=client_limit(&packet), .question=packet.question};
                 int query_id = pending_add(&new_query);
 
                 if (query_id < 0) {
@@ -311,15 +342,16 @@ static void handle_upstream(const int sock_up, const int sock, cache *c, list *b
         }
         else if (step == RESOLVE_DONE) {
             resolver_add_cnames(q, &reply);
+            strip_opt(&reply);
             reply.id = q->client_id;
             reply.rd = 1;
             reply.ra = 1;
             reply.aa = 0;
-            const int reply_len = create_dns_packet(buf, sizeof buf, &reply);
+            const int reply_len = write_reply(buf, q->client_limit, reply);
             if (reply_len > 0) sendto(sock, buf, reply_len, 0, (struct sockaddr *)&q->client, q->client_len);
             pending_remove(q);
 
-            if ((reply.rcode == DNS_RCODE_NOERROR || reply.rcode == DNS_RCODE_NXDOMAIN) && !reply.tc) {
+            if (reply.rcode == DNS_RCODE_NOERROR || reply.rcode == DNS_RCODE_NXDOMAIN) {
                 cache_insert(c, reply);
             }
             else {

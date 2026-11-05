@@ -77,7 +77,9 @@ static resolve_step next_query(query *q, uint8_t *out, const size_t out_size, in
     if (q->queries_left <= 0) return RESOLVE_FAILED;
     q->queries_left--;
 
-    const dns_packet request = {.id = q->id, .opcode = DNS_OPCODE_QUERY, .qd_count = 1, .question = q->question};
+    dns_record opt = {.type = DNS_TYPE_OPT, .class = EDNS_UDP_SIZE}; // For OPT, class holds the UDP size
+    const dns_packet request = {.id = q->id, .opcode = DNS_OPCODE_QUERY, .qd_count = 1, .ar_count = 1,
+                                .question = q->question, .additional = &opt};
     *out_len = create_dns_packet(out, out_size, &request);
     if (*out_len < 0) return RESOLVE_FAILED;
 
@@ -235,6 +237,8 @@ void resolver_add_cnames(const query *q, dns_packet *reply) {
 // Decides the next step for a lookup from a nameserver's response: retry, follow a CNAME or referral, or finish
 // *qp changes if the step moves the lookup to a parent or child query
 resolve_step resolver_on_response(query **qp, const dns_packet *reply, uint8_t *out, const size_t out_size, int *out_len, char *next_ip) {
+    if (reply->tc) return try_next_server(qp, out, out_size, out_len, next_ip);
+
     query *q = *qp;
     if (reply->rcode != DNS_RCODE_NOERROR && reply->rcode != DNS_RCODE_NXDOMAIN) {
         return try_next_server(qp, out, out_size, out_len, next_ip);

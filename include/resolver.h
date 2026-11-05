@@ -1,8 +1,9 @@
 #ifndef DNS_RESOLVER_H
 #define DNS_RESOLVER_H
 #include <stdint.h>
-
 #include "pending.h"
+
+#define EDNS_UDP_SIZE 1232
 
 typedef enum {
     RESOLVE_SEND,
