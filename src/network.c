@@ -250,8 +250,17 @@ static size_t client_limit(const dns_packet *p) {
 // Writes reply into out, up to limit bytes. If it doesn't fit, writes an empty reply with the TC flag set instead
 // Returns the length in bytes, or -1 on failure
 static int write_reply(uint8_t *out, const size_t limit, dns_packet reply) {
-    const int len = create_dns_packet(out, limit, &reply);
+    int len = create_dns_packet(out, limit, &reply);
     if (len >= 0) return len;
+
+    reply.ar_count = 0;
+    len = create_dns_packet(out, limit, &reply);
+    if (len >= 0) return len;
+
+    if (reply.an_count > 0) reply.ns_count = 0;
+    len = create_dns_packet(out, limit, &reply);
+    if (len >= 0) return len;
+
     reply.tc = 1;
     reply.an_count = reply.ns_count = reply.ar_count = 0;
     return create_dns_packet(out, limit, &reply);
