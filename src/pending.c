@@ -28,6 +28,19 @@ query *pending_find(const uint16_t id) {
     return (slot->in_use && slot->id == id) ? slot : NULL;
 }
 
+// Returns the client's in-progress lookup with the given client ID, or NULL if there isn't one
+query *pending_find_client(const struct sockaddr_in *client, const uint16_t client_id) {
+    for (int i = 0; i < PENDING_SIZE; i++) {
+        query *q = &table[i];
+        if (q->in_use && !q->parent && q->client_id == client_id &&
+            q->client.sin_addr.s_addr == client->sin_addr.s_addr &&
+            q->client.sin_port == client->sin_port) {
+            return q;
+        }
+    }
+    return NULL;
+}
+
 // Frees up a slot in the pending table
 void pending_remove(query *q) {
     if (!q->in_use) return;

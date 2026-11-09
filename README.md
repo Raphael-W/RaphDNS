@@ -67,11 +67,16 @@ These are best-case figures: nearly all queries are cache hits for 20 domains, w
 
 - [ ] Use name compression in responses
 - [ ] Write a test suite
-- [ ] Implement TCP fallback
-- [ ] Handle truncated DNS packets
-- [ ] Implement IPv6 support
 - [ ] Cache individual records rather than whole packets
+- [ ] Implement TCP fallback
+- [ ] Implement IPv6 support
 - [ ] Implement DNSSEC validation
+
+## Notes
+- Now that duplicate queries are dropped (and logged), it has raised a significant issue: clients are retrying their requests because of how long the server takes to respond.
+- The underlying issue here is that responses are cached all together. This means that only the exact question hits the cache - everything else starts again from root nameservers.
+- By storing response records individually, the server wouldn't have to do as much work.
+- Right now resolving `drive.google.com` starts from root and resolves down: `root` -> `com` -> `google.com` -> `drive.google.com`. `www.google.com` should be able to branch off from `google.com` and answer almost instantly, but instead it starts again from `root`. In one test, having just visited `drive.google.com`, `www.google.com` took 6 seconds. As a side effect, the server was flooded with repeat retries from the client, assuming its initial requests were lost. "No server could possibly take this long, something must be wrong".
 
 ## Credits
 

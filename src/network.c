@@ -346,6 +346,9 @@ static void handle_client(int sock, int sock_up, cache *c, list *blocklist) {
                 response_length = make_error(&packet, DNS_RCODE_REFUSED, response_buf, sizeof response_buf);
                 log_query(LOG_YELLOW, "Refused", &packet.question, "(not cached, RD not set)", now_nanos() - start_time);
             }
+            else if (pending_find_client(&client, packet.id)) {
+                log_query(LOG_YELLOW, "Duplicate", &packet.question, "(already resolving)", now_nanos() - start_time);
+            }
             else { // Not cached: start resolving
                 query new_query = {.client=client, .client_id=packet.id, .client_len=client_len, .client_limit=client_limit(&packet), .question=packet.question, .start_time=start_time};
                 int query_id = pending_add(&new_query);

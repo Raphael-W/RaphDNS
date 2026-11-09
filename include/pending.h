@@ -49,6 +49,7 @@ typedef struct query {
 
 int pending_add(const query *q);
 query *pending_find(uint16_t id);
+query *pending_find_client(const struct sockaddr_in *client, const uint16_t client_id);
 void pending_remove(query *q);
 query *pending_next_expired(time_t now);
 time_t pending_earliest(void);
