@@ -66,7 +66,6 @@ These are best-case figures: nearly all queries are cache hits for 20 domains, w
 ## Roadmap (in order of priority)
 
 - [ ] Use name compression in responses
-- [ ] Write a test suite
 - [ ] Cache individual records rather than whole packets
 - [ ] Implement TCP fallback
 - [ ] Implement IPv6 support
