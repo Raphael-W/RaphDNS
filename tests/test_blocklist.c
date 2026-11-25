@@ -13,9 +13,14 @@
 static char tmp_dir[PATH_MAX];
 
 // Writes contents to tmp_dir/name and returns the full path (valid until the next call)
+// Returns "" if the path is too long, so loading it fails
 static const char *write_file(const char *name, const char *contents) {
     static char path[PATH_MAX];
-    snprintf(path, sizeof path, "%s/%s", tmp_dir, name);
+    if (!FORMAT(path, "%s/%s", tmp_dir, name)) {
+        CHECK(!"path too long");
+        path[0] = '\0';
+        return path;
+    }
     FILE *f = fopen(path, "w");
     if (f) { fputs(contents, f); fclose(f); }
     return path;
@@ -137,9 +142,9 @@ static void test_grows_when_load_factor_reached(void) {
 }
 
 static void test_load_missing_file_fails(void) {
-    list *l = list_create(8);
     char path[PATH_MAX];
-    snprintf(path, sizeof path, "%s/does-not-exist.txt", tmp_dir);
+    REQUIRE(FORMAT(path, "%s/does-not-exist.txt", tmp_dir));
+    list *l = list_create(8);
     CHECK(load_blocklist(path, l) == -1);
     CHECK(l->entry_count == 0);
     CHECK(l->buf_count == 0);
@@ -161,11 +166,11 @@ static void test_load_several_files(void) {
 // Loads regular files, but skips hidden files and subdirectories
 static void test_load_directory(void) {
     char dir[PATH_MAX];
-    snprintf(dir, sizeof dir, "%s/lists", tmp_dir);
+    REQUIRE(FORMAT(dir, "%s/lists", tmp_dir));
     mkdir(dir, 0700);
 
     char sub[PATH_MAX];
-    snprintf(sub, sizeof sub, "%s/nested", dir);
+    REQUIRE(FORMAT(sub, "%s/nested", dir));
     mkdir(sub, 0700);
 
     write_file("lists/ads.txt", "ads.com\n");
@@ -182,9 +187,9 @@ static void test_load_directory(void) {
 }
 
 static void test_load_missing_directory_fails(void) {
-    list *l = list_create(8);
     char dir[PATH_MAX];
-    snprintf(dir, sizeof dir, "%s/no-such-dir", tmp_dir);
+    REQUIRE(FORMAT(dir, "%s/no-such-dir", tmp_dir));
+    list *l = list_create(8);
     CHECK(load_blocklists(dir, l) == -1);
     list_free(l);
 }

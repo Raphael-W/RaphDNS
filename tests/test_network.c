@@ -207,7 +207,7 @@ static void test_reply_is_blocked(void) {
     snprintf(dir, sizeof dir, "%s/dns_network_XXXXXX", base && *base ? base : "/tmp");
     if (!mkdtemp(dir)) { perror("mkdtemp"); CHECK(false); return; }
     char path[PATH_MAX];
-    snprintf(path, sizeof path, "%s/list.txt", dir);
+    if (!FORMAT(path, "%s/list.txt", dir)) { rmdir(dir); CHECK(!"path too long"); return; }
     FILE *f = fopen(path, "w");
     if (f) { fputs("ads.example.com\n", f); fclose(f); }
 
