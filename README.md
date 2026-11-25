@@ -63,11 +63,29 @@ Measured on an Apple M4 Pro with the client and server on the same machine, over
 
 These are best-case figures: nearly all queries are cache hits for 20 domains, with no network between client and server.
 
-## Roadmap (in order of priority)
+## Roadmap
+
+### Caching
 - [ ] Cache individual records rather than whole packets
+- [ ] Prefetch popular domains shortly before their TTL expires
+- [ ] Serve stale answers when upstream servers can't be reached (RFC 8767)
+
+### Security
+- [ ] Perform bailiwick checks, only accepting records within the zone the answering server is responsible for
+- [ ] Only answer local clients, so the server can't be used as an open resolver
+- [ ] Randomise the source port of each upstream query, adding up to 16 bits of entropy against Kaminsky-style cache poisoning
+- [ ] Perform 0x20 case randomisation on upstream queries
+- [ ] Implement DNSSEC validation
+
+### Protocol
 - [ ] Implement TCP fallback
 - [ ] Implement IPv6 support
-- [ ] Implement DNSSEC validation
+- [ ] Implement QNAME minimisation, sending each server only as much of the name as it needs (RFC 9156)
+
+### Usability
+- [ ] Reload blocklists without restarting, on `SIGHUP`
+- [ ] Add an allowlist to unblock domains the blocklist wrongly catches
+- [ ] Add local records, e.g. `pi.home` pointing to a device on the network
 
 ## Notes
 - Now that duplicate queries are dropped (and logged), it has raised a significant issue: clients are retrying their requests because of how long the server takes to respond.
