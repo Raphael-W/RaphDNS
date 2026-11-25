@@ -4,6 +4,8 @@
 #include <string.h>
 #include <arpa/inet.h>
 
+#define MAX_NAME_ENTRIES 64
+
 // BIT READING & WRITING
 typedef struct {
     uint8_t *buf; // buffer to write to
@@ -18,6 +20,16 @@ typedef struct {
     size_t bit;         // current position, in bits
     bool ok;            // false if we ran past the end
 } bit_reader;
+
+typedef struct {
+    const char *suffix;
+    uint16_t offset;
+} name_entry;
+
+typedef struct {
+    name_entry entries[MAX_NAME_ENTRIES];
+    size_t count;
+} name_table;
 
 // Returns the next `count` bits from the buffer in r, clearing r->ok if it runs out
 static uint32_t read_bits(bit_reader *r, const unsigned count) {
@@ -78,6 +90,17 @@ static void read_name(bit_reader *r, char *out, const size_t out_size) {
     if (jumps) r->bit = resume;
 }
 
+static void name_table_add(name_table *t, const char *in, const size_t p_offset) {
+    if (p_offset > 0x3FFF) return; // maximum pointer
+    const name_entry e = {.offset = p_offset, .suffix = in};
+
+    const size_t max_count = sizeof t->entries / sizeof e;
+    if (t->count >= max_count) return;
+
+    t->entries[t->count] = e;
+    t->count++;
+}
+
 // Writes a hostname to the buffer in w as DNS labels, without using compression
 static void write_name(bit_writer *w, const char *in) {
     while (*in) {
@@ -85,6 +108,38 @@ static void write_name(bit_writer *w, const char *in) {
         if (len == 0 || len > 63) {
             w->ok = false; return;
         }
+        write_bits(w, len, 8);
+        for (size_t i = 0; i < len; i++) {
+            write_bits(w, (uint8_t)in[i], 8);
+        }
+        in += len;
+        if (*in == '.') in++;
+    }
+    write_bits(w, 0, 8);
+}
+
+static const name_entry *find_name_occurrence(const name_table *t, const char *in) {
+    for (size_t i = 0; i < t->count; i++) {
+        if (strcasecmp(t->entries[i].suffix, in) == 0) {
+            return &t->entries[i];
+        }
+    }
+    return NULL;
+}
+
+static void write_compressed_name(bit_writer *w, name_table *t, const char *in) {
+    while (*in) {
+        const size_t len = strcspn(in, ".");
+        if (len == 0 || len > 63) {
+            w->ok = false; return;
+        }
+        const name_entry *n = find_name_occurrence(t, in);
+        if (n) {
+            write_bits(w, 0xC000 | n->offset, 16);
+            return;
+        }
+        name_table_add(t, in, w->bit / 8);
+
         write_bits(w, len, 8);
         for (size_t i = 0; i < len; i++) {
             write_bits(w, (uint8_t)in[i], 8);
@@ -195,8 +250,8 @@ static dns_record *read_records(bit_reader *r, const uint16_t count) {
 }
 
 // Writes a record to a packet buffer
-static void write_record(bit_writer *w, const dns_record *rec) {
-    write_name(w, rec->name);
+static void write_record(bit_writer *w, name_table *t, const dns_record *rec) {
+    write_compressed_name(w, t, rec->name);
     write_bits(w, rec->type, 16);
     write_bits(w, rec->class, 16);
     write_bits(w, rec->ttl, 32);
@@ -208,9 +263,9 @@ static void write_record(bit_writer *w, const dns_record *rec) {
 }
 
 // Writes a list of records to a packet buffer
-static void write_records(bit_writer *w, const dns_record *records, const uint16_t count) {
+static void write_records(bit_writer *w, name_table *t, const dns_record *records, const uint16_t count) {
     for (uint16_t i = 0; i < count && w->ok; i++) {
-        write_record(w, &records[i]);
+        write_record(w, t, &records[i]);
     }
 }
 
@@ -256,6 +311,7 @@ int parse_dns_packet(const uint8_t* buf, const size_t buf_size, dns_packet *p) {
 // Serialises p into buf. Returns the packet's length in bytes, or -1 on failure
 int create_dns_packet(uint8_t* buf, const size_t buf_size, const dns_packet* p) {
     bit_writer w = {.buf = buf, .size = buf_size, .bit = 0, .ok = true};
+    name_table t = {0};
     memset(buf, 0, 12);
 
     // HEADER
@@ -276,14 +332,14 @@ int create_dns_packet(uint8_t* buf, const size_t buf_size, const dns_packet* p) 
     write_bits(&w, p->ar_count, 16);
 
     // QUESTION
-    write_name(&w, p->question.name);
+    write_compressed_name(&w, &t, p->question.name);
     write_bits(&w, p->question.type, 16);
     write_bits(&w, p->question.class, 16);
 
     // RECORDS
-    write_records(&w, p->answers, p->an_count);
-    write_records(&w, p->authority, p->ns_count);
-    write_records(&w, p->additional, p->ar_count);
+    write_records(&w, &t, p->answers, p->an_count);
+    write_records(&w, &t, p->authority, p->ns_count);
+    write_records(&w, &t, p->additional, p->ar_count);
 
     return w.ok ? (int)((w.bit + 7) / 8) : -1;
 }

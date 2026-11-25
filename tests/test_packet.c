@@ -101,6 +101,37 @@ static void test_create_matches_wire_bytes(void) {
     CHECK(len == (int)sizeof EXAMPLE_QUERY && memcmp(buf, EXAMPLE_QUERY, len) == 0);
 }
 
+// An answer with the same name as the question should be written as a pointer to offset 12
+static void test_create_compresses_answer_name(void) {
+    uint8_t ip[] = {93, 184, 215, 14};
+    dns_record answer = {.name = "example.com", .type = DNS_TYPE_A, .class = DNS_CLASS_IN,
+                         .ttl = 3600, .rdlength = 4, .rdata = ip};
+    const dns_packet in = {.id = 0x1234, .qr = 1, .rd = 1, .ra = 1, .qd_count = 1, .an_count = 1,
+                           .question = {.name = "example.com", .type = DNS_TYPE_A, .class = DNS_CLASS_IN},
+                           .answers = &answer};
+    uint8_t buf[512];
+    const int len = create_dns_packet(buf, sizeof buf, &in);
+
+    CHECK(len == (int)sizeof EXAMPLE_RESPONSE && memcmp(buf, EXAMPLE_RESPONSE, len) == 0);
+}
+
+// A name that only shares a suffix should write its own labels, then a pointer to the shared part
+static void test_create_compresses_name_suffix(void) {
+    uint8_t ip[] = {1, 2, 3, 4};
+    dns_record answer = {.name = "mail.example.com", .type = DNS_TYPE_A, .class = DNS_CLASS_IN,
+                         .ttl = 60, .rdlength = 4, .rdata = ip};
+    const dns_packet in = {.id = 1, .qr = 1, .qd_count = 1, .an_count = 1,
+                           .question = {.name = "example.com", .type = DNS_TYPE_A, .class = DNS_CLASS_IN},
+                           .answers = &answer};
+    uint8_t buf[512];
+    const int len = create_dns_packet(buf, sizeof buf, &in);
+
+    // The answer starts after the 12-byte header and 17-byte question
+    const uint8_t expected_name[] = {4, 'm', 'a', 'i', 'l', 0xC0, 0x0C};
+    CHECK(len == 29 + 7 + 10 + 4);
+    CHECK(len > 29 && memcmp(buf + 29, expected_name, sizeof expected_name) == 0);
+}
+
 static void test_create_fails_when_buffer_too_small(void) {
     const dns_packet in = {.id = 1, .qd_count = 1,
                            .question = {.name = "example.com", .type = DNS_TYPE_A, .class = DNS_CLASS_IN}};
@@ -149,6 +180,8 @@ int main(void) {
     RUN(test_parse_compressed_answer);
     RUN(test_round_trip_query);
     RUN(test_create_matches_wire_bytes);
+    RUN(test_create_compresses_answer_name);
+    RUN(test_create_compresses_name_suffix);
     RUN(test_create_fails_when_buffer_too_small);
     RUN(test_rejects_short_header);
     RUN(test_rejects_truncated_question);

@@ -64,8 +64,6 @@ Measured on an Apple M4 Pro with the client and server on the same machine, over
 These are best-case figures: nearly all queries are cache hits for 20 domains, with no network between client and server.
 
 ## Roadmap (in order of priority)
-
-- [ ] Use name compression in responses
 - [ ] Cache individual records rather than whole packets
 - [ ] Implement TCP fallback
 - [ ] Implement IPv6 support
