@@ -14,7 +14,6 @@
 #include <poll.h>
 #include <fcntl.h>
 #include <errno.h>
-#include <sys/ioctl.h>
 
 #include "resolver.h"
 
@@ -55,14 +54,8 @@ static void format_duration(const uint64_t ns, char *out, const size_t len) {
     else                       snprintf(out, len, "%llu s",  (unsigned long long)(ns / 1000000000));
 }
 
-// Returns the terminal width in columns, or 0 if stdout isn't a terminal (e.g. redirected to a file)
-static int terminal_width(void) {
-    struct winsize ws;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) return ws.ws_col;
-    return 0;
-}
-
-// Logs the outcome of a query, if verbose, with how long it took pinned to the right edge of the terminal
+// Logs the outcome of a query, if verbose, with how long it took in a fixed-width column after the timestamp
+// Nothing depends on the terminal width, so lines stay aligned when the window is resized or output is redirected
 // question can be NULL if there isn't a usable one, and detail can be NULL if there's nothing to add
 static void log_query(const char *colour, const char *status, const dns_question *question, const char *detail, const uint64_t elapsed) {
     if (!verbose) return;
@@ -70,32 +63,16 @@ static void log_query(const char *colour, const char *status, const dns_question
     const char *name = question ? question->name : "";
     const char *separator = question && detail ? " " : "";
 
-    char prefix[32];
-    const int prefix_len = log_timestamp(prefix, sizeof prefix);
+    char timestamp[32];
+    log_timestamp(timestamp, sizeof timestamp);
 
-    // The status, type, name and detail, as one left-justified block
-    char left[320];
-    const int left_len = snprintf(left, sizeof left, "%-9s %-7s %s%s%s",
-                                  status, type, name, separator, detail ? detail : "");
-
+    // Right-aligned to the widest duration ("999 ms"), so the columns after it line up
     char dur[16];
     format_duration(elapsed, dur, sizeof dur);
-    const int dur_len = (int)strlen(dur);
+    char prefix[64];
+    snprintf(prefix, sizeof prefix, "%s%6s  ", timestamp, dur);
 
-    // Pad so the duration ends one column shy of the right edge; fall back to a fixed column off a terminal.
-    // A name wider than the screen clamps to a single space and wraps, which no layout can avoid
-    char body[512];
-    const int width = terminal_width();
-    if (width > 0) {
-        int pad = width - prefix_len - left_len - dur_len - 1;
-        if (pad < 1) pad = 1;
-        snprintf(body, sizeof body, "%s%*s%s", left, pad, "", dur);
-    }
-    else {
-        snprintf(body, sizeof body, "%-60s %s", left, dur);
-    }
-
-    log_message(prefix, colour, "%s", body);
+    log_message(prefix, colour, "%-9s %-7s %s%s%s", status, type, name, separator, detail ? detail : "");
 }
 
 // Writes an error response to the query into out, with the given rcode
