@@ -26,7 +26,7 @@ When a query arrives, the server checks the blocklist, then the cache, and only 
 
 ## Getting started
 
-Requires CMake 4.3+ and a C17 compiler. Developed and tested on macOS.
+Requires CMake 3.20+ and a C17 compiler. Developed on macOS, and tested on macOS and Debian.
 
 ```sh
 cmake -S . -B build
