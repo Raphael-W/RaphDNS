@@ -32,5 +32,9 @@ foreach(args "-p;0" "-p;65536" "-p;12abc" "-p;" "-b;256.0.0.1" "-x")
     set_tests_properties(${test_name} PROPERTIES WILL_FAIL TRUE)
 endforeach()
 
+# Runs the server and queries it with dig. Exits 77 (skipped) if dig isn't installed
+add_test(NAME dig COMMAND sh ${PROJECT_SOURCE_DIR}/tests/test_dig.sh $<TARGET_FILE:dns>)
+set_tests_properties(dig PROPERTIES SKIP_RETURN_CODE 77)
+
 target_compile_options(dnscore PUBLIC -Wall -Wextra -g -O2)
 target_compile_definitions(dnscore PUBLIC BLOCKLIST_DIR="${PROJECT_SOURCE_DIR}/blocklists")
