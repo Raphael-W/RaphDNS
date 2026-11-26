@@ -10,7 +10,8 @@ add_library(dnscore STATIC
         src/cache.c
         src/pending.c
         src/resolver.c
-        src/blocklist.c)
+        src/blocklist.c
+        src/local.c)
 
 target_include_directories(dnscore PUBLIC include)
 
@@ -18,7 +19,7 @@ add_executable(dns src/main.c)
 target_link_libraries(dns PRIVATE dnscore)
 
 enable_testing()
-foreach(name packet cache helpers pending blocklist resolver network)
+foreach(name packet cache helpers pending blocklist resolver network local)
     add_executable(test_${name} tests/test_${name}.c)
     target_link_libraries(test_${name} PRIVATE dnscore)
     add_test(NAME ${name} COMMAND test_${name})

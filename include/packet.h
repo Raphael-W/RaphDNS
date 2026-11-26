@@ -82,6 +82,7 @@ typedef struct {
 } dns_packet;
 
 bool record_rdata_name(const dns_record *rec, char *out, size_t out_size);
+int name_to_wire(const char *name, uint8_t *out, size_t out_size);
 int parse_dns_packet(const uint8_t* buf, size_t buf_size, dns_packet *p);
 int create_dns_packet(uint8_t* buf, size_t buf_size, const dns_packet* p);
 void free_dns_packet(dns_packet *p);

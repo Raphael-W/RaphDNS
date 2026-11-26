@@ -6,6 +6,7 @@
 - Written from scratch in C, with no external libraries
 - Resolves from the root servers, with no upstream provider like 1.1.1.1
 - Blocks ads, trackers and malware using a list of around 250,000 domains
+- Answers local names like `nas.home.arpa` from a hosts-style file, including reverse lookups
 - Caches answers until their TTL expires
 - Handles many lookups at once on a single thread
 - Logs every query with `-v`, colour-coded by outcome
@@ -47,6 +48,7 @@ dig @127.0.0.1 example.com
 | `-v`           | Log every query                                           | Off         |
 | `-p [port]`    | Port to listen on                                         | `53`        |
 | `-b [address]` | IPv4 address to bind to. Use `0.0.0.0` for all interfaces | `127.0.0.1` |
+| `-l [file]`    | Hosts-style file of local records (`address name...`)     | None        |
 | `-h`           | Show usage and exit                                       |             |
 
 Any file placed in `blocklists/` is loaded at startup, with one domain per line and `#` for comments.
@@ -84,8 +86,6 @@ These are best-case figures: nearly all queries are cache hits for 20 domains, w
 
 ### Usability
 - [ ] Reload blocklists without restarting, on `SIGHUP`
-- [ ] Add an allowlist to unblock domains the blocklist wrongly catches
-- [ ] Add local records, e.g. `pi.home` pointing to a device on the network
 
 ## Notes
 - Now that duplicate queries are dropped (and logged), it has raised a significant issue: clients are retrying their requests because of how long the server takes to respond.

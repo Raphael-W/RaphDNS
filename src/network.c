@@ -4,6 +4,7 @@
 #include "helpers.h"
 #include "pending.h"
 #include "blocklist.h"
+#include "local.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -244,7 +245,7 @@ static int write_reply(uint8_t *out, const size_t limit, dns_packet reply) {
 }
 
 // Reads all waiting client packets: answers each query from the cache, or starts resolving it if it isn't cached
-static void handle_client(int sock, int sock_up, cache *c, list *blocklist) {
+static void handle_client(int sock, int sock_up, cache *c, list *blocklist, local_records *l_records) {
     // Fetches all packets until EAGAIN (no more to fetch)
     for (;;) {
         uint8_t buf[BUF_SIZE];
@@ -308,9 +309,25 @@ static void handle_client(int sock, int sock_up, cache *c, list *blocklist) {
         }
 
         else { // Valid request
+            dns_packet local_reply = {0};
+            const local_status status = local_record_packet(l_records, &packet, &local_reply);
             const dns_packet *cached = cache_lookup(c, &packet.question);
 
-            if (cached) { // Cache exists
+            if (status > LOCAL_NOT_FOUND) {
+                response_length = write_reply(response_buf, client_limit(&packet), local_reply);
+                free_dns_packet(&local_reply);
+                if (response_length > 0) {
+                    if (status == LOCAL_ANSWER) log_query(LOG_GREEN, "Local", &packet.question, NULL, now_nanos() - start_time);
+                    if (status == LOCAL_NO_DATA) log_query(LOG_YELLOW, "Local", &packet.question, "(no records of this type)", now_nanos() - start_time);
+                    if (status == LOCAL_NXDOMAIN) log_query(LOG_YELLOW, "Local", &packet.question, "(no such local name)", now_nanos() - start_time);
+                }
+            }
+
+            else if (status == LOCAL_ERROR) {
+                response_length = -1;
+            }
+
+            else if (cached) { // Cache exists
                 dns_packet reply = *cached;
                 reply.id = packet.id;
                 reply.question = packet.question;
@@ -448,7 +465,7 @@ static void handle_upstream(const int sock_up, const int sock, cache *c, list *b
 
 // Creates both sockets, then polls them forever, handling queries, responses and timeouts
 // Returns 1 if a socket can't be opened
-int network_listen(const int port, const char* ip, list *blocklist, const bool log_queries) {
+int network_listen(const int port, const char* ip, list *blocklist, local_records *l_records, const bool log_queries) {
     verbose = log_queries;
 
     cache cache = cache_create(8);
@@ -480,7 +497,7 @@ int network_listen(const int port, const char* ip, list *blocklist, const bool l
 
         if (poll(fds, 2, timeout_ms) < 0) { perror("poll"); continue; }
 
-        if (fds[0].revents & POLLIN) handle_client(sock, up_sock, &cache, blocklist);
+        if (fds[0].revents & POLLIN) handle_client(sock, up_sock, &cache, blocklist, l_records);
         if (fds[1].revents & POLLIN) handle_upstream(up_sock, sock, &cache, blocklist);
         expire_pending(sock, up_sock, now_seconds());
     }

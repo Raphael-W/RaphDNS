@@ -118,6 +118,14 @@ static void write_name(bit_writer *w, const char *in) {
     write_bits(w, 0, 8);
 }
 
+// Writes name into out as uncompressed DNS labels (e.g. for a record's rdata)
+// Returns the number of bytes written, or -1 if a label is empty or too long, or it doesn't fit
+int name_to_wire(const char *name, uint8_t *out, const size_t out_size) {
+    bit_writer w = {.buf = out, .size = out_size, .bit = 0, .ok = true};
+    write_name(&w, name);
+    return w.ok ? (int)(w.bit / 8) : -1;
+}
+
 static const name_entry *find_name_occurrence(const name_table *t, const char *in) {
     for (size_t i = 0; i < t->count; i++) {
         if (strcasecmp(t->entries[i].suffix, in) == 0) {
