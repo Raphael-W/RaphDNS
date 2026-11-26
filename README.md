@@ -3,9 +3,8 @@
 ![Query log from running with -v, showing resolved, cached, blocked and rejected queries](docs/screenshot.png)
 
 ## Features
-- Written from scratch in C, with no external libraries
-- Resolves from the root servers, with no upstream provider like 1.1.1.1
-- Blocks ads, trackers and malware using a list of around 250,000 domains
+- Resolves from the root servers
+- Blocks ads, trackers and malware using [HaGeZi's Multi PRO](https://github.com/hagezi/dns-blocklists) blocklist of around 250,000 domains
 - Answers local names like `nas.home.arpa` from a hosts-style file, including reverse lookups
 - Caches answers until their TTL expires
 - Handles many lookups at once on a single thread
@@ -84,14 +83,12 @@ These are best-case figures: nearly all queries are cache hits for 20 domains, w
 - [ ] Implement IPv6 support
 - [ ] Implement QNAME minimisation, sending each server only as much of the name as it needs (RFC 9156)
 
-### Usability
-- [ ] Reload blocklists without restarting, on `SIGHUP`
-
 ## Notes
 - Now that duplicate queries are dropped (and logged), it has raised a significant issue: clients are retrying their requests because of how long the server takes to respond.
 - The underlying issue here is that responses are cached all together. This means that only the exact question hits the cache - everything else starts again from root nameservers.
 - By storing response records individually, the server wouldn't have to do as much work.
-- Right now resolving `drive.google.com` starts from root and resolves down: `root` -> `com` -> `google.com` -> `drive.google.com`. `www.google.com` should be able to branch off from `google.com` and answer almost instantly, but instead it starts again from `root`. In one test, having just visited `drive.google.com`, `www.google.com` took 6 seconds. As a side effect, the server was flooded with repeat retries from the client, assuming its initial requests were lost. "No server could possibly take this long, something must be wrong".
+- From a cold start, resolving `www.google.com` starts from root and resolves down: `root` -> `com` -> `google.com` -> `www.google.com`. A request for `google.com` should then be instant since it was already resolved once before, but instead, resolving has to start again from `root`. In one test, this second resolve took 6 seconds.
+- As a side effect, the server gets flooded with repeat retries from clients, assuming their initial request was lost. "No server could possibly take this long, something must be wrong".
 
 ## Credits
 
