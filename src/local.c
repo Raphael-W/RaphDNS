@@ -8,6 +8,7 @@
 
 #include <arpa/inet.h>
 
+// Returns true if the name is home.arpa or a subdomain of it, ignoring case
 static bool is_local_name(const char* name) {
     const size_t len = strlen(name);
     if (len == 9 && strcasecmp(name, "home.arpa") == 0) return true;
@@ -18,12 +19,16 @@ static bool is_local_name(const char* name) {
     return false;
 }
 
+// Writes the reverse lookup name for an IPv4 address into out, e.g. 20.0.168.192.in-addr.arpa
+// Returns -1 if out is too small
 static int ipv4_ptr_name(const uint8_t *rdata, char* out, const size_t out_size) {
     const int n = snprintf(out, out_size, "%u.%u.%u.%u.in-addr.arpa", rdata[3], rdata[2], rdata[1], rdata[0]);
     if (n < 0 || n >= (int) out_size) return -1;
     return 0;
 }
 
+// Writes the reverse lookup name for an IPv6 address into out, one nibble per label in reverse order, ending in ip6.arpa
+// Returns -1 if out is too small
 static int ipv6_ptr_name(const uint8_t *rdata, char* out, const size_t out_size) {
     int pos = 0;
     for (int i = 0; i < 16; i++) {
@@ -39,6 +44,8 @@ static int ipv6_ptr_name(const uint8_t *rdata, char* out, const size_t out_size)
     return 0;
 }
 
+// Copies a record into the list, dropping any trailing dot from the name and growing the list if it's full
+// Returns -1 if the name or rdata is too long, or allocation fails
 int insert_record(local_records *l, const char *name, const uint16_t type, const uint16_t rdlength, const uint8_t *rdata) {
     size_t name_len = strlen(name);
     if (name_len > 0 && name[name_len - 1] == '.') name_len--; // remove a trailing dot
@@ -62,6 +69,8 @@ int insert_record(local_records *l, const char *name, const uint16_t type, const
     return 0;
 }
 
+// Resizes the record array to hold new_size records
+// Leaves the list unchanged and returns -1 if new_size is smaller than the record count, or allocation fails
 int local_records_resize(local_records *l, const size_t new_size) {
     if (new_size < l->count) return -1;
     local_record *grown = realloc(l->records, new_size * sizeof *grown);
@@ -72,13 +81,14 @@ int local_records_resize(local_records *l, const size_t new_size) {
     return 0;
 }
 
-// Frees the blocklist, its table and the file contents its names point into
+// Frees the record list and its record array
 void local_records_free(local_records *l) {
     if (!l) return;
     free(l->records);
     free(l);
 }
 
+// Returns an empty record list with room for `size` records, or NULL if allocation fails
 local_records *local_records_create(const size_t size) {
     local_records *l = malloc(sizeof *l);
     if (!l) return NULL;
@@ -90,6 +100,8 @@ local_records *local_records_create(const size_t size) {
     return l;
 }
 
+// Loads a hosts-style file into the list, adding an A or AAAA record for each name and a PTR record pointing back to it
+// Invalid lines are reported and skipped. Returns -1 if the file can't be opened
 int load_local_records(const char* path, local_records *l) {
     FILE *f = fopen(path, "r");
     if (!f) { perror(path); return -1; }
@@ -145,6 +157,8 @@ int load_local_records(const char* path, local_records *l) {
     return 0;
 }
 
+// Builds a reply to q from the local records into p
+// Returns LOCAL_NOT_FOUND if the name isn't local, so it should be resolved as normal
 local_status local_record_packet(const local_records *l, const dns_packet *q, dns_packet *p) {
     int record_count = 0;
     int rcode = DNS_RCODE_NOERROR;
